@@ -1,0 +1,25 @@
+[package]
+name = "gpui-ohos-example"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "gpui_ohos_example"
+crate-type = ["cdylib"]
+doctest = false
+test = false
+
+[dependencies]
+gpui-ohos = { path = ".." }
+napi-derive-ohos = "=1.2.0"
+napi-ohos = "=1.2.0"
+openharmony-ability = "1.0.0-beta.2"
+openharmony-ability-derive = "1.0.0-beta.1"
+
+[build-dependencies]
+napi-build-ohos = "=1.2.0"
+
+[workspace]
+resolver = "2"
