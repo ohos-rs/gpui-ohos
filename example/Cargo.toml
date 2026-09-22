@@ -12,11 +12,16 @@ doctest = false
 test = false
 
 [dependencies]
-gpui-ohos = { path = ".." }
+gpui-ohos = { path = "..", default-features = false }
 napi-derive-ohos = "=1.2.0"
 napi-ohos = "=1.2.0"
 openharmony-ability = "1.0.0-beta.2"
 openharmony-ability-derive = "1.0.0-beta.1"
+
+[features]
+default = ["gles"]
+gles = ["gpui-ohos/gles"]
+vulkan = ["gpui-ohos/vulkan"]
 
 [build-dependencies]
 napi-build-ohos = "=1.2.0"

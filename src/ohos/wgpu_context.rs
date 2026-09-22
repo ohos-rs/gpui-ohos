@@ -1,6 +1,10 @@
 use anyhow::Context as _;
 use std::sync::Arc;
+#[cfg(feature = "gles")]
 use wgpu::hal::Instance as _;
+
+#[cfg(not(any(feature = "gles", feature = "vulkan")))]
+compile_error!("enable at least one graphics backend: `gles` or `vulkan`");
 
 pub struct WgpuContext {
     pub instance: wgpu::Instance,
@@ -31,7 +35,11 @@ impl WgpuContext {
             }
         };
 
-        let default_backends = wgpu::Backends::GL;
+        let mut default_backends = wgpu::Backends::empty();
+        #[cfg(feature = "gles")]
+        default_backends.insert(wgpu::Backends::GL);
+        #[cfg(feature = "vulkan")]
+        default_backends.insert(wgpu::Backends::VULKAN);
         let backends = match wgpu::Backends::from_env() {
             Some(configured_backends) if configured_backends.is_empty() => {
                 log::warn!(
@@ -107,6 +115,7 @@ impl WgpuContext {
         instance: &wgpu::Instance,
         device_id_filter: Option<u32>,
     ) -> anyhow::Result<wgpu::Adapter> {
+        #[cfg(feature = "gles")]
         if let Some(hal_instance) = unsafe { instance.as_hal::<wgpu::hal::api::Gles>() } {
             // SAFETY: The exposed adapters are enumerated from the HAL instance owned by
             // this exact wgpu instance and are immediately imported back into it.
@@ -185,6 +194,7 @@ impl WgpuContext {
                 power_preference: wgpu::PowerPreference::None,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|e| anyhow::anyhow!("Failed to request GPU adapter: {e}"))

@@ -178,7 +178,13 @@ impl WgpuRenderer {
             .iter()
             .find(|f| surface_caps.formats.contains(f))
             .copied()
-            .or_else(|| surface_caps.formats.iter().find(|f| !f.is_srgb()).copied())
+            .or_else(|| {
+                surface_caps
+                    .formats
+                    .iter()
+                    .find(|f| !f.has_srgb_suffix())
+                    .copied()
+            })
             .unwrap_or(surface_caps.formats[0]);
 
         let pick_alpha_mode =
@@ -209,6 +215,7 @@ impl WgpuRenderer {
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: config.size.width.0 as u32,
             height: config.size.height.0 as u32,
             present_mode: wgpu::PresentMode::Fifo,
@@ -905,6 +912,7 @@ impl WgpuRenderer {
                                topology: wgpu::PrimitiveTopology,
                                color_targets: &[Option<wgpu::ColorTargetState>],
                                sample_count: u32| {
+            let vertex_buffers = vertex_buffers.iter().cloned().map(Some).collect::<Vec<_>>();
             let bind_group_layouts = bind_group_layouts
                 .iter()
                 .copied()
@@ -922,7 +930,7 @@ impl WgpuRenderer {
                 vertex: wgpu::VertexState {
                     module: &shader_module,
                     entry_point: Some(vs_entry),
-                    buffers: vertex_buffers,
+                    buffers: &vertex_buffers,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -1284,7 +1292,7 @@ impl WgpuRenderer {
                         "instance buffer size grew too large: {}",
                         self.instance_buffer_capacity
                     );
-                    frame.present();
+                    self.queue.present(frame);
                     return;
                 }
                 self.grow_instance_buffer();
@@ -1414,7 +1422,7 @@ impl WgpuRenderer {
                         "instance buffer size grew too large: {}",
                         self.instance_buffer_capacity
                     );
-                    frame.present();
+                    self.queue.present(frame);
                     return;
                 }
                 self.grow_instance_buffer();
@@ -1422,7 +1430,7 @@ impl WgpuRenderer {
             }
 
             self.queue.submit(std::iter::once(encoder.finish()));
-            frame.present();
+            self.queue.present(frame);
             return;
         }
     }
