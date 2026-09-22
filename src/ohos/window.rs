@@ -1,0 +1,1470 @@
+use log::{debug, warn};
+
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+    sync::Arc,
+};
+
+use anyhow::Result;
+use futures::channel::oneshot;
+use openharmony_ability::{
+    ArkUiInputEvent, AvoidAreaType, Event, ImeEvent, InputEvent, OpenHarmonyApp, PointerInputData,
+    XComponentInputEvent,
+    arkui::arkui_input_binding::{UIInputAction, UIInputToolType},
+    xcomponent::{
+        MouseAction, MouseButton as OhosMouseButton, TouchEvent as OhosTouchEvent, TouchEventData,
+        TouchPointData,
+    },
+};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+
+use super::display::OhosDisplay;
+use super::wgpu_context::WgpuContext;
+use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
+use crate::{
+    Bounds, Capslock, DevicePixels, ForegroundExecutor, GestureTuning, GpuSpecs, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels,
+    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
+    PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, Scene, ScrollDelta,
+    ScrollWheelEvent, Size, TextInputStateChange, TouchEvent, TouchId, TouchPhase,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
+    WindowDecorations, WindowParams, WindowVisibility, point, px, size,
+};
+
+pub(crate) struct OhosWindow {
+    app: Rc<RefCell<Option<OpenHarmonyApp>>>,
+    bounds: RefCell<Bounds<Pixels>>,
+    scale: RefCell<f32>,
+    keyboard_overlap_device_px: Cell<i32>,
+    input_handler: Rc<RefCell<Option<PlatformInputHandler>>>,
+    callbacks: Rc<RefCell<WindowCallbacks>>,
+    renderer: RefCell<Option<WgpuRenderer>>,
+    gpu_context: Arc<WgpuContext>,
+    foreground_executor: ForegroundExecutor,
+    keyboard_visible: Rc<Cell<bool>>,
+    pointer_position: Cell<Option<Point<Pixels>>>,
+    pressed_mouse_button: Cell<Option<MouseButton>>,
+    active_touches: RefCell<HashMap<i32, TouchId>>,
+    touch_tap_candidates: RefCell<HashMap<i32, TouchTapCandidate>>,
+    next_touch_id: Cell<u64>,
+}
+
+pub(crate) struct OhosWindowHandle {
+    inner: Rc<RefCell<OhosWindow>>,
+    input_handler: Rc<RefCell<Option<PlatformInputHandler>>>,
+}
+
+impl OhosWindowHandle {
+    pub(crate) fn new(inner: Rc<RefCell<OhosWindow>>) -> Self {
+        let input_handler = inner.borrow().input_handler.clone();
+        Self {
+            inner,
+            input_handler,
+        }
+    }
+
+    fn with_window<R>(&self, f: impl FnOnce(&OhosWindow) -> R) -> R {
+        let window = self.inner.borrow();
+        f(&window)
+    }
+
+    fn with_window_mut<R>(&self, f: impl FnOnce(&mut OhosWindow) -> R) -> R {
+        let mut window = self.inner.borrow_mut();
+        f(&mut window)
+    }
+}
+
+struct WindowCallbacks {
+    request_frame: Option<Box<dyn FnMut(RequestFrameOptions)>>,
+    input: Option<Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>>,
+    active_status_change: Option<Box<dyn FnMut(bool)>>,
+    visibility_change: Option<Box<dyn FnMut(WindowVisibility)>>,
+    hover_status_change: Option<Box<dyn FnMut(bool)>>,
+    resize: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
+    moved: Option<Box<dyn FnMut()>>,
+    should_close: Option<Box<dyn FnMut() -> bool>>,
+    close: Option<Box<dyn FnOnce()>>,
+    appearance_changed: Option<Box<dyn FnMut()>>,
+    hit_test_window_control: Option<Box<dyn FnMut() -> Option<WindowControlArea>>>,
+}
+
+#[derive(Clone, Copy)]
+struct TouchTapCandidate {
+    start_position: Point<Pixels>,
+    started_in_text_input: bool,
+}
+
+impl OhosWindow {
+    pub(crate) fn new(
+        app: Rc<RefCell<Option<OpenHarmonyApp>>>,
+        _handle: crate::AnyWindowHandle,
+        params: WindowParams,
+        gpu_context: Arc<WgpuContext>,
+        foreground_executor: ForegroundExecutor,
+    ) -> Result<Self> {
+        let scale = app
+            .borrow()
+            .as_ref()
+            .map(|a| a.scale() as f32)
+            .unwrap_or(1.0);
+        let bounds = params.bounds;
+
+        // Don't create renderer immediately - native_window may not be available yet.
+        // Renderer will be initialized lazily in draw() or when SurfaceCreate event is received.
+        // At that point, native_window from OpenHarmonyApp will be available.
+
+        Ok(Self {
+            app: app.clone(),
+            bounds: RefCell::new(bounds),
+            scale: RefCell::new(scale),
+            keyboard_overlap_device_px: Cell::new(0),
+            input_handler: Rc::new(RefCell::new(None)),
+            callbacks: Rc::new(RefCell::new(WindowCallbacks {
+                request_frame: None,
+                input: None,
+                active_status_change: None,
+                visibility_change: None,
+                hover_status_change: None,
+                resize: None,
+                moved: None,
+                should_close: None,
+                close: None,
+                appearance_changed: None,
+                hit_test_window_control: None,
+            })),
+            renderer: RefCell::new(None),
+            gpu_context,
+            foreground_executor,
+            keyboard_visible: Rc::new(Cell::new(false)),
+            pointer_position: Cell::new(None),
+            pressed_mouse_button: Cell::new(None),
+            active_touches: RefCell::new(HashMap::new()),
+            touch_tap_candidates: RefCell::new(HashMap::new()),
+            next_touch_id: Cell::new(0),
+        })
+    }
+
+    fn dispatch_input_with_callbacks(
+        callbacks: &Rc<RefCell<WindowCallbacks>>,
+        input: PlatformInput,
+    ) -> crate::DispatchEventResult {
+        let mut callback = callbacks.borrow_mut().input.take();
+        let mut result = crate::DispatchEventResult::default();
+        if let Some(ref mut cb) = callback {
+            result = cb(input);
+        }
+        callbacks.borrow_mut().input = callback;
+        result
+    }
+
+    fn point_from_device_pixels(&self, x: f32, y: f32) -> Point<Pixels> {
+        let scale = (*self.scale.borrow()).max(f32::EPSILON);
+        point(px(x / scale), px(y / scale))
+    }
+
+    fn pointer_position_from_arkui(&self, pointer: PointerInputData) -> Point<Pixels> {
+        self.point_from_device_pixels(pointer.x, pointer.y)
+    }
+
+    fn allocate_touch_id(&self) -> TouchId {
+        let raw_id = self.next_touch_id.get();
+        self.next_touch_id
+            .set(raw_id.checked_add(1).expect("touch ID exhausted"));
+        TouchId(raw_id)
+    }
+
+    fn dispatch_raw_touch_point(&self, raw_id: i32, x: f32, y: f32, force: f32, phase: TouchPhase) {
+        let position = self.point_from_device_pixels(x, y);
+        let id = if phase == TouchPhase::Started {
+            let id = self.allocate_touch_id();
+            let mut active_touches = self.active_touches.borrow_mut();
+            if active_touches.is_empty() {
+                self.touch_tap_candidates.borrow_mut().insert(
+                    raw_id,
+                    TouchTapCandidate {
+                        start_position: position,
+                        // Capture this before GPUI translates the touch into its
+                        // compatibility mouse gesture. A newly focused input will
+                        // use the regular FocusGained path; only an input that was
+                        // already focused needs an explicit IME reopen request.
+                        started_in_text_input: self.pointer_targets_text_input(position),
+                    },
+                );
+            } else {
+                self.touch_tap_candidates.borrow_mut().clear();
+            }
+            active_touches.insert(raw_id, id);
+            id
+        } else {
+            let Some(id) = self.active_touches.borrow().get(&raw_id).copied() else {
+                return;
+            };
+            id
+        };
+        self.pointer_position.set(Some(position));
+        let should_reopen_keyboard = match phase {
+            TouchPhase::Moved => {
+                if self.touch_moved_beyond_tap_slop(raw_id, position) {
+                    self.touch_tap_candidates.borrow_mut().remove(&raw_id);
+                }
+                false
+            }
+            TouchPhase::Ended => self
+                .touch_tap_candidates
+                .borrow_mut()
+                .remove(&raw_id)
+                .is_some_and(|candidate| {
+                    candidate.started_in_text_input
+                        && (position - candidate.start_position).magnitude()
+                            <= f64::from(GestureTuning::default().touch_slop)
+                }),
+            TouchPhase::Cancelled => {
+                self.touch_tap_candidates.borrow_mut().remove(&raw_id);
+                false
+            }
+            TouchPhase::Started => false,
+        };
+        self.dispatch_input(PlatformInput::Touch(TouchEvent {
+            id,
+            phase,
+            position,
+            predicted_position: None,
+            force: force.is_finite().then(|| force.clamp(0.0, 1.0)),
+        }));
+        if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+            self.active_touches.borrow_mut().remove(&raw_id);
+        }
+        if should_reopen_keyboard {
+            // Focusing an already-focused GPUI input is otherwise a no-op.
+            // OHOS can dismiss its IME without changing that focus, so an
+            // editable tap must always be treated as a fresh show request.
+            // Do not inspect DispatchEventResult::default_prevented here:
+            // focusable GPUI elements set it specifically to stop ancestors
+            // from stealing focus.
+            self.request_keyboard();
+        }
+    }
+
+    fn touch_moved_beyond_tap_slop(&self, raw_id: i32, position: Point<Pixels>) -> bool {
+        self.touch_tap_candidates
+            .borrow()
+            .get(&raw_id)
+            .is_some_and(|candidate| {
+                (position - candidate.start_position).magnitude()
+                    > f64::from(GestureTuning::default().touch_slop)
+            })
+    }
+
+    fn pointer_targets_text_input(&self, position: Point<Pixels>) -> bool {
+        let Some(mut handler) = self.input_handler.borrow_mut().take() else {
+            return false;
+        };
+        let targets_text_input = handler.query_accepts_text_input()
+            && handler
+                .element_bounds()
+                .is_some_and(|bounds| bounds.contains(&position));
+        *self.input_handler.borrow_mut() = Some(handler);
+        targets_text_input
+    }
+
+    fn dispatch_raw_touch_data(&self, event: &TouchEventData, point: &TouchPointData) {
+        let phase = match event.event_type {
+            OhosTouchEvent::Down => TouchPhase::Started,
+            OhosTouchEvent::Move => TouchPhase::Moved,
+            OhosTouchEvent::Up => TouchPhase::Ended,
+            OhosTouchEvent::Cancel => TouchPhase::Cancelled,
+            OhosTouchEvent::Unknown => return,
+        };
+        self.dispatch_raw_touch_point(point.id, point.x, point.y, point.force, phase);
+    }
+
+    fn dispatch_raw_touch_event(&self, event: &TouchEventData) {
+        match event.event_type {
+            OhosTouchEvent::Move | OhosTouchEvent::Cancel if !event.touch_points.is_empty() => {
+                for point in &event.touch_points {
+                    self.dispatch_raw_touch_data(event, point);
+                }
+            }
+            OhosTouchEvent::Down | OhosTouchEvent::Up => {
+                if let Some(point) = event.touch_points.iter().find(|point| point.id == event.id) {
+                    self.dispatch_raw_touch_data(event, point);
+                } else {
+                    let phase = if event.event_type == OhosTouchEvent::Down {
+                        TouchPhase::Started
+                    } else {
+                        TouchPhase::Ended
+                    };
+                    self.dispatch_raw_touch_point(event.id, event.x, event.y, event.force, phase);
+                }
+            }
+            OhosTouchEvent::Move | OhosTouchEvent::Cancel => {
+                let phase = if event.event_type == OhosTouchEvent::Move {
+                    TouchPhase::Moved
+                } else {
+                    TouchPhase::Cancelled
+                };
+                self.dispatch_raw_touch_point(event.id, event.x, event.y, event.force, phase);
+            }
+            OhosTouchEvent::Unknown => {}
+        }
+    }
+
+    fn dispatch_scroll(
+        &self,
+        position: Point<Pixels>,
+        delta: Point<Pixels>,
+        touch_phase: TouchPhase,
+    ) -> crate::DispatchEventResult {
+        Self::dispatch_input_with_callbacks(
+            &self.callbacks,
+            PlatformInput::ScrollWheel(ScrollWheelEvent {
+                position,
+                delta: ScrollDelta::Pixels(delta),
+                modifiers: Modifiers::default(),
+                touch_phase,
+            }),
+        )
+    }
+
+    fn mouse_button(button: OhosMouseButton) -> Option<MouseButton> {
+        match button {
+            OhosMouseButton::NoneButton => None,
+            OhosMouseButton::LeftButton => Some(MouseButton::Left),
+            OhosMouseButton::RightButton => Some(MouseButton::Right),
+            OhosMouseButton::MiddleButton => Some(MouseButton::Middle),
+            OhosMouseButton::BackButton => Some(MouseButton::Navigate(NavigationDirection::Back)),
+            OhosMouseButton::ForwardButton => {
+                Some(MouseButton::Navigate(NavigationDirection::Forward))
+            }
+        }
+    }
+
+    fn show_keyboard_if_needed(&self) {
+        if !self.keyboard_visible.get() {
+            self.request_keyboard();
+        }
+    }
+
+    fn request_keyboard(&self) {
+        if let Some(app) = self.app.borrow().as_ref() {
+            app.show_keyboard();
+            self.keyboard_visible.set(true);
+        }
+    }
+
+    fn hide_keyboard_if_needed(&self) {
+        if self.keyboard_visible.replace(false) {
+            if let Some(app) = self.app.borrow().as_ref() {
+                app.hide_keyboard();
+            }
+        }
+    }
+
+    fn notify_keyboard_hidden_by_user_if_needed(&self) {
+        self.keyboard_visible.set(false);
+    }
+
+    fn keyboard_inset_for_overlap(&self, overlap_device_px: i32) -> Pixels {
+        const MIN_CONTENT_HEIGHT: f32 = 64.0;
+
+        let overlap = overlap_device_px.max(0) as f32;
+        let scale = self.scale_factor().max(1.0);
+        let mut inset = (overlap / scale).max(0.0);
+        let bounds_height = self.bounds.borrow().size.height.as_f32().max(0.0);
+        let max_inset = (bounds_height - MIN_CONTENT_HEIGHT).max(0.0);
+        if inset > max_inset {
+            inset = max_inset;
+        }
+        px(inset)
+    }
+
+    fn keyboard_overlap_from_avoid_area_device_px(&self) -> Option<i32> {
+        let app_ref = self.app.borrow();
+        let app = app_ref.as_ref()?;
+
+        let content_rect = app.content_rect();
+        if content_rect.height <= 0 {
+            return Some(0);
+        }
+
+        // Use actual XComponent rect as layout basis for keyboard-avoid computation.
+        // This keeps behavior correct for embedded/non-fullscreen XComponents.
+        let layout_top = content_rect.top;
+        let layout_height = content_rect.height.max(0);
+        if layout_height <= 0 {
+            return Some(0);
+        }
+        let window_rect = app.window_rect();
+        let window_top = window_rect.top;
+        let window_bottom = window_rect.top.saturating_add(window_rect.height.max(0));
+
+        let keyboard_area = app.avoid_area(AvoidAreaType::Keyboard);
+        let system_area = app.avoid_area(AvoidAreaType::System);
+        let system_gesture_area = app.avoid_area(AvoidAreaType::SystemGesture);
+        let navigation_indicator_area = app.avoid_area(AvoidAreaType::NavigationIndicator);
+
+        // OHOS avoid-area bottomRect coordinates are in window/screen space.
+        // XComponent's content_rect can be reported in safe-content coordinates on some devices.
+        // For root full-width layouts, infer top-safe offset so intersection uses a consistent space.
+        let root_layout_width_matches_window = content_rect.width > 0
+            && window_rect.width > 0
+            && (content_rect.width - window_rect.width).abs() <= 1;
+        let can_infer_root_safe_top = layout_top == 0
+            && layout_height > 0
+            && window_rect.height >= layout_height
+            && root_layout_width_matches_window;
+        let inferred_outside_bottom_safe = if can_infer_root_safe_top {
+            let bottom_safe_overlap = |area: Option<openharmony_ability::AvoidArea>| -> i32 {
+                let Some(area) = area else {
+                    return 0;
+                };
+                if !area.visible || area.bottom_rect.height <= 0 {
+                    return 0;
+                }
+                let start = area.bottom_rect.top;
+                let end = area
+                    .bottom_rect
+                    .top
+                    .saturating_add(area.bottom_rect.height.max(0));
+                if end < window_bottom {
+                    return 0;
+                }
+                (window_bottom - start)
+                    .max(0)
+                    .min(area.bottom_rect.height.max(0))
+            };
+
+            bottom_safe_overlap(system_area)
+                .max(bottom_safe_overlap(system_gesture_area))
+                .max(bottom_safe_overlap(navigation_indicator_area))
+        } else {
+            0
+        };
+        let inferred_top_safe = if can_infer_root_safe_top {
+            (window_rect.height.max(0) - layout_height - inferred_outside_bottom_safe).max(0)
+        } else {
+            0
+        };
+        // Convert GPUI layout bounds to screen space before intersection.
+        let layout_top_screen = window_top
+            .saturating_add(inferred_top_safe)
+            .saturating_add(layout_top);
+        let layout_bottom_screen = layout_top_screen.saturating_add(layout_height);
+
+        let keyboard_avoid_visible = keyboard_area.map(|a| a.visible).unwrap_or(false);
+        if !(self.keyboard_visible.get() || keyboard_avoid_visible) {
+            return Some(0);
+        }
+
+        // Keyboard event only determines show/hide state.
+        // Actual inset is derived from avoid-area geometry.
+        // When keyboard is shown, include bottom occlusion union of:
+        // - Keyboard area
+        // - System bottom area (3-button navigation etc.)
+        // - System gesture area
+        // - Navigation indicator area
+        // This prevents under-subtraction where keyboard area excludes nav area.
+        let mut intervals: Vec<(i32, i32)> = Vec::with_capacity(4);
+        let mut push_bottom_overlap_interval =
+            |area: openharmony_ability::AvoidArea, require_visible: bool| {
+                if area.bottom_rect.height <= 0 {
+                    return;
+                }
+                if require_visible && !area.visible {
+                    return;
+                }
+                let start = area.bottom_rect.top.max(layout_top_screen);
+                let end = area
+                    .bottom_rect
+                    .top
+                    .saturating_add(area.bottom_rect.height.max(0))
+                    .min(layout_bottom_screen);
+                if end > start {
+                    intervals.push((start, end));
+                }
+            };
+
+        if let Some(area) = keyboard_area {
+            push_bottom_overlap_interval(area, true);
+        }
+        if let Some(area) = system_area {
+            push_bottom_overlap_interval(area, false);
+        }
+        if let Some(area) = system_gesture_area {
+            push_bottom_overlap_interval(area, false);
+        }
+        if let Some(area) = navigation_indicator_area {
+            push_bottom_overlap_interval(area, false);
+        }
+
+        if intervals.is_empty() {
+            return Some(0);
+        }
+
+        intervals.sort_unstable_by_key(|(start, _)| *start);
+        let mut union_overlap = 0i32;
+        let mut current = intervals[0];
+        for &(start, end) in intervals.iter().skip(1) {
+            if start <= current.1 {
+                current.1 = current.1.max(end);
+            } else {
+                union_overlap = union_overlap.saturating_add(current.1 - current.0);
+                current = (start, end);
+            }
+        }
+        union_overlap = union_overlap.saturating_add(current.1 - current.0);
+
+        let geometric_overlap = union_overlap.min(layout_height.max(0));
+        let clamped_overlap = geometric_overlap;
+
+        Some(clamped_overlap)
+    }
+
+    fn refresh_keyboard_overlap_device_px(&self) -> bool {
+        let previous_overlap = self.keyboard_overlap_device_px.get();
+        let next_overlap = self
+            .keyboard_overlap_from_avoid_area_device_px()
+            .unwrap_or(0)
+            .max(0);
+        if previous_overlap != next_overlap {
+            self.keyboard_overlap_device_px.set(next_overlap);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn effective_content_size(&self) -> Size<Pixels> {
+        let bounds_size = self.bounds.borrow().size;
+        let bounds_height = bounds_size.height.as_f32().max(0.0);
+        let keyboard_inset = self
+            .keyboard_inset_for_overlap(self.keyboard_overlap_device_px.get())
+            .as_f32();
+        size(
+            bounds_size.width,
+            px((bounds_height - keyboard_inset).max(0.0)),
+        )
+    }
+
+    fn emit_resize_callback(&self) {
+        let scale = *self.scale.borrow();
+        let content_size = self.effective_content_size();
+
+        let mut callback = self.callbacks.borrow_mut().resize.take();
+        if let Some(ref mut cb) = callback {
+            cb(content_size, scale);
+        }
+        self.callbacks.borrow_mut().resize = callback;
+    }
+
+    /// Initialize the renderer when native_window becomes available (after SurfaceCreate event).
+    /// This method gets the raw_window_handle from OpenHarmonyApp's native_window.
+    pub(crate) fn initialize_renderer(&self) -> Result<()> {
+        let mut renderer_guard = self.renderer.borrow_mut();
+        if renderer_guard.is_some() {
+            // Already initialized
+            return Ok(());
+        }
+
+        // Get native_window from OpenHarmonyApp - it should be available after SurfaceCreate
+        let app = self.app.borrow();
+        let app_ref = app.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("OpenHarmonyApp not available when initializing renderer")
+        })?;
+
+        // Check that native_window is available - this is required for the renderer to work.
+        // The actual window handle is obtained via HasWindowHandle trait implementation.
+        let _native_window = app_ref.native_window().ok_or_else(|| {
+            anyhow::anyhow!(
+                "native_window not available yet - SurfaceCreate event may not have been received"
+            )
+        })?;
+
+        // Get the actual window size from content_rect.
+        // Using the correct size is important because mismatched sizes between
+        // the surface configuration and the actual native_window can cause
+        // rendering issues (stretched/cropped content, black borders, etc.)
+        // even though create_platform_window_surface itself won't fail.
+        let content_rect = app_ref.content_rect();
+        let scale = app_ref.scale() as f32;
+        let device_width = if content_rect.width > 0 {
+            content_rect.width as u32
+        } else {
+            // Fallback to bounds if content_rect is not available yet
+            self.bounds.borrow().size.width.as_f32() as u32
+        };
+        let device_height = if content_rect.height > 0 {
+            content_rect.height as u32
+        } else {
+            self.bounds.borrow().size.height.as_f32() as u32
+        };
+
+        debug!(
+            "OhosWindow: Initializing renderer with size {}x{}",
+            device_width, device_height
+        );
+
+        // Update window bounds to match actual content_rect (convert device px -> logical px)
+        if content_rect.width > 0 && content_rect.height > 0 {
+            let logical_size = size(
+                px(device_width as f32 / scale),
+                px(device_height as f32 / scale),
+            );
+            let logical_origin = point(
+                px(content_rect.left as f32 / scale),
+                px(content_rect.top as f32 / scale),
+            );
+            *self.bounds.borrow_mut() = Bounds::new(logical_origin, logical_size);
+        }
+
+        let config = WgpuSurfaceConfig {
+            size: Size {
+                width: DevicePixels(device_width as i32),
+                height: DevicePixels(device_height as i32),
+            },
+            transparent: true,
+        };
+
+        debug!(
+            "OhosWindow: Surface config - width: {}, height: {}, transparent: false",
+            device_width, device_height
+        );
+
+        // Debug: Check window handle before creating renderer
+        match self.window_handle() {
+            Ok(handle) => {
+                debug!(
+                    "OhosWindow: Window handle obtained successfully: {:?}",
+                    handle.as_raw()
+                );
+            }
+            Err(e) => {
+                warn!("OhosWindow: Failed to get window handle: {:?}", e);
+                return Err(anyhow::anyhow!("Window handle not available: {:?}", e));
+            }
+        }
+
+        debug!("OhosWindow: Creating WgpuRenderer...");
+
+        // Create renderer using the window's HasWindowHandle and HasDisplayHandle implementation
+        // which will get the raw_window_handle from native_window
+        let renderer = WgpuRenderer::new(&self.gpu_context, self, config)
+            .map_err(|e| {
+                warn!("OhosWindow: WgpuRenderer::new failed: {}", e);
+                anyhow::anyhow!("Failed to create Wgpu renderer: {}. Make sure native_window is available from OpenHarmonyApp.", e)
+            })?;
+
+        *renderer_guard = Some(renderer);
+        debug!("OhosWindow: Renderer initialized successfully");
+        Ok(())
+    }
+
+    pub(crate) fn handle_event(&self, event: &Event) {
+        match event {
+            Event::SurfaceCreate => {
+                debug!("OhosWindow: SurfaceCreate event received - initializing renderer");
+                // Initialize renderer when SurfaceCreate event is received
+                // Note: on_finish_launching is handled at the platform level (OhosPlatform::handle_ohos_event)
+                // before windows are created.
+                match self.initialize_renderer() {
+                    Ok(()) => {
+                        debug!("OhosWindow: Renderer initialized successfully");
+                    }
+                    Err(e) => {
+                        warn!(
+                            "OhosWindow: Failed to initialize renderer: {}. Make sure native_window is available from OpenHarmonyApp.",
+                            e
+                        );
+                    }
+                }
+                if self.refresh_keyboard_overlap_device_px() {
+                    self.emit_resize_callback();
+                }
+            }
+            Event::WindowResize(ohos_size) => {
+                // openharmony-ability currently maps both the ArkTS windowSizeChange callback and
+                // the XComponent surface callback to WindowResize. In a floating 2-in-1 window the
+                // former includes the server-side title bar, while the native render surface does
+                // not. Prefer the active XComponent rect whenever it is available so that the
+                // renderer and GPUI viewport always use the drawable content size.
+                let content_rect = self
+                    .app
+                    .borrow()
+                    .as_ref()
+                    .map(|app| app.content_rect())
+                    .unwrap_or_default();
+                let device_width = if content_rect.width > 0 {
+                    content_rect.width
+                } else {
+                    ohos_size.width
+                };
+                let device_height = if content_rect.height > 0 {
+                    content_rect.height
+                } else {
+                    ohos_size.height
+                };
+                if device_width != ohos_size.width || device_height != ohos_size.height {
+                    debug!(
+                        "OhosWindow: Normalizing window resize {}x{} to XComponent surface {}x{}",
+                        ohos_size.width, ohos_size.height, device_width, device_height,
+                    );
+                }
+                let scale = *self.scale.borrow();
+                let width = device_width as f32;
+                let height = device_height as f32;
+                let new_size = size(px(width / scale), px(height / scale));
+                let origin = self.bounds.borrow().origin;
+                *self.bounds.borrow_mut() = Bounds::new(origin, new_size);
+                self.refresh_keyboard_overlap_device_px();
+
+                // Update renderer's drawable size
+                if let Some(ref mut renderer) = *self.renderer.borrow_mut() {
+                    let device_size = Size {
+                        width: DevicePixels(width as i32),
+                        height: DevicePixels(height as i32),
+                    };
+                    renderer.update_drawable_size(device_size);
+                }
+                self.emit_resize_callback();
+            }
+            Event::ContentRectChange(..) => {
+                if self.refresh_keyboard_overlap_device_px() {
+                    self.emit_resize_callback();
+                }
+            }
+            Event::AvoidAreaChange(info) => {
+                if matches!(
+                    info.area_type,
+                    AvoidAreaType::Keyboard
+                        | AvoidAreaType::System
+                        | AvoidAreaType::SystemGesture
+                        | AvoidAreaType::NavigationIndicator
+                ) && self.refresh_keyboard_overlap_device_px()
+                {
+                    self.emit_resize_callback();
+                }
+            }
+            Event::WindowRedraw(_) => {
+                // Take the callback out to avoid holding borrow during execution
+                // This is critical because the callback will eventually call window.draw()
+                // which may access other parts of OhosWindow
+                let mut callback = self.callbacks.borrow_mut().request_frame.take();
+                if let Some(ref mut cb) = callback {
+                    cb(RequestFrameOptions {
+                        require_presentation: false,
+                        force_render: false,
+                    });
+                } else {
+                    warn!("OhosWindow: WindowRedraw event but no request_frame callback set");
+                }
+                // Put it back for next frame
+                self.callbacks.borrow_mut().request_frame = callback;
+            }
+            Event::Input(input_event) => {
+                self.handle_input_event(input_event);
+            }
+            Event::GainedFocus => {
+                let mut callback = self.callbacks.borrow_mut().active_status_change.take();
+                if let Some(ref mut cb) = callback {
+                    cb(true);
+                }
+                self.callbacks.borrow_mut().active_status_change = callback;
+            }
+            Event::LostFocus => {
+                let mut callback = self.callbacks.borrow_mut().active_status_change.take();
+                if let Some(ref mut cb) = callback {
+                    cb(false);
+                }
+                self.callbacks.borrow_mut().active_status_change = callback;
+                self.hide_keyboard_if_needed();
+                if self.refresh_keyboard_overlap_device_px() {
+                    self.emit_resize_callback();
+                }
+            }
+            Event::ConfigChanged(..) => {
+                let new_scale = self
+                    .app
+                    .borrow()
+                    .as_ref()
+                    .map(|a| a.scale() as f32)
+                    .unwrap_or(1.0);
+                *self.scale.borrow_mut() = new_scale;
+                self.refresh_keyboard_overlap_device_px();
+                self.emit_resize_callback();
+            }
+            Event::WindowDestroy => {
+                if self.refresh_keyboard_overlap_device_px() {
+                    self.emit_resize_callback();
+                }
+                // For should_close, we need to call it and check return value
+                let mut should_close_callback = self.callbacks.borrow_mut().should_close.take();
+                let should_close = if let Some(ref mut cb) = should_close_callback {
+                    cb()
+                } else {
+                    true // Default to allowing close if no callback
+                };
+                self.callbacks.borrow_mut().should_close = should_close_callback;
+
+                if should_close {
+                    // close is FnOnce, so we just take and call it
+                    if let Some(callback) = self.callbacks.borrow_mut().close.take() {
+                        callback();
+                    }
+                }
+            }
+            Event::KeyboardEvent(height) => {
+                if *height <= 0 {
+                    self.notify_keyboard_hidden_by_user_if_needed();
+                } else {
+                    self.keyboard_visible.set(true);
+                }
+                if self.refresh_keyboard_overlap_device_px() {
+                    self.emit_resize_callback();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_input_event(&self, event: &InputEvent) {
+        match event {
+            InputEvent::Ime(ime_event) => {
+                if matches!(
+                    ime_event,
+                    ImeEvent::ImeStatusEvent(openharmony_ability::ime::KeyboardStatus::Hide)
+                ) {
+                    self.notify_keyboard_hidden_by_user_if_needed();
+                    if self.refresh_keyboard_overlap_device_px() {
+                        self.emit_resize_callback();
+                    }
+                }
+
+                let handler_ref = self.input_handler.clone();
+                let ime_event = ime_event.clone();
+                let executor = self.foreground_executor.clone();
+
+                executor
+                    .spawn(async move {
+                        let mut handler_guard = handler_ref.borrow_mut();
+                        let Some(handler) = handler_guard.as_mut() else {
+                            return;
+                        };
+
+                        match ime_event {
+                            ImeEvent::TextInputEvent(data) => {
+                                handler.replace_text_in_range(None, &data.text);
+                                handler.unmark_text();
+                            }
+                            ImeEvent::EnterEvent(_action) => {
+                                handler.replace_text_in_range(None, "\n");
+                                handler.unmark_text();
+                            }
+                            ImeEvent::BackspaceEvent(len) => {
+                                let len = (len).max(0) as usize;
+                                if len == 0 {
+                                    return;
+                                }
+
+                                if let Some(selection) = handler.selected_text_range(true) {
+                                    let range = if selection.range.start != selection.range.end {
+                                        selection.range
+                                    } else {
+                                        let caret = if selection.reversed {
+                                            selection.range.start
+                                        } else {
+                                            selection.range.end
+                                        };
+                                        let start = caret.saturating_sub(len);
+                                        start..caret
+                                    };
+                                    handler.replace_text_in_range(Some(range), "");
+                                } else {
+                                    handler.replace_text_in_range(None, "");
+                                }
+                            }
+                            ImeEvent::ImeStatusEvent(status) => {
+                                if matches!(status, openharmony_ability::ime::KeyboardStatus::Hide)
+                                {
+                                    handler.unmark_text();
+                                }
+                            }
+                        }
+                    })
+                    .detach();
+            }
+            InputEvent::XComponent(XComponentInputEvent::Mouse(mouse_event)) => {
+                let position = self.point_from_device_pixels(mouse_event.x, mouse_event.y);
+                self.pointer_position.set(Some(position));
+                let event_button = Self::mouse_button(mouse_event.button);
+                match mouse_event.action {
+                    MouseAction::Press => {
+                        let Some(button) = event_button else {
+                            return;
+                        };
+                        self.pressed_mouse_button.set(Some(button));
+                        self.dispatch_input(PlatformInput::MouseDown(MouseDownEvent {
+                            button,
+                            position,
+                            modifiers: Modifiers::default(),
+                            click_count: 1,
+                            first_mouse: false,
+                        }));
+                    }
+                    MouseAction::Release => {
+                        let button = event_button.or(self.pressed_mouse_button.get());
+                        self.pressed_mouse_button.set(None);
+                        let Some(button) = button else {
+                            return;
+                        };
+                        self.dispatch_input(PlatformInput::MouseUp(MouseUpEvent {
+                            button,
+                            position,
+                            modifiers: Modifiers::default(),
+                            click_count: 1,
+                        }));
+                    }
+                    MouseAction::Move => {
+                        self.dispatch_input(PlatformInput::MouseMove(MouseMoveEvent {
+                            position,
+                            pressed_button: self.pressed_mouse_button.get().or(event_button),
+                            modifiers: Modifiers::default(),
+                        }));
+                    }
+                    MouseAction::None => {}
+                }
+            }
+            InputEvent::ArkUi(ArkUiInputEvent::Axis(axis_event)) => {
+                let position = self.pointer_position_from_arkui(axis_event.pointer);
+                self.pointer_position.set(Some(position));
+                let raw_delta = point(axis_event.delta_x as f32, axis_event.delta_y as f32);
+                let delta = if axis_event.pointer.tool_type == UIInputToolType::Touchpad {
+                    self.point_from_device_pixels(raw_delta.x, raw_delta.y)
+                } else {
+                    raw_delta.map(px)
+                };
+                let touch_phase = match axis_event.pointer.action {
+                    UIInputAction::Down => TouchPhase::Started,
+                    UIInputAction::Up | UIInputAction::Cancel => TouchPhase::Ended,
+                    UIInputAction::Move => TouchPhase::Moved,
+                };
+                if delta.x != px(0.0)
+                    || delta.y != px(0.0)
+                    || matches!(touch_phase, TouchPhase::Started | TouchPhase::Ended)
+                {
+                    self.dispatch_scroll(position, delta, touch_phase);
+                }
+            }
+            InputEvent::ArkUi(ArkUiInputEvent::Gesture(_)) => {}
+            InputEvent::XComponent(XComponentInputEvent::Touch(touch_event)) => {
+                self.dispatch_raw_touch_event(touch_event);
+            }
+            InputEvent::XComponent(XComponentInputEvent::Key(_)) => {}
+        }
+    }
+
+    fn dispatch_input(&self, input: PlatformInput) -> crate::DispatchEventResult {
+        Self::dispatch_input_with_callbacks(&self.callbacks, input)
+    }
+}
+
+impl HasWindowHandle for OhosWindow {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        self.app
+            .borrow()
+            .as_ref()
+            .and_then(|app| app.native_window())
+            .and_then(|native_window| native_window.raw_window_handle())
+            .map(|raw_handle| unsafe { raw_window_handle::WindowHandle::borrow_raw(raw_handle) })
+            .ok_or(raw_window_handle::HandleError::Unavailable)
+    }
+}
+
+impl HasWindowHandle for OhosWindowHandle {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        self.inner
+            .borrow()
+            .app
+            .borrow()
+            .as_ref()
+            .and_then(|app| app.native_window())
+            .and_then(|native_window| native_window.raw_window_handle())
+            .map(|raw_handle| unsafe { raw_window_handle::WindowHandle::borrow_raw(raw_handle) })
+            .ok_or(raw_window_handle::HandleError::Unavailable)
+    }
+}
+
+impl HasDisplayHandle for OhosWindow {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        Ok(raw_window_handle::DisplayHandle::ohos())
+    }
+}
+
+impl HasDisplayHandle for OhosWindowHandle {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        Ok(raw_window_handle::DisplayHandle::ohos())
+    }
+}
+
+impl PlatformWindow for OhosWindowHandle {
+    fn bounds(&self) -> Bounds<Pixels> {
+        self.with_window(|window| window.bounds())
+    }
+
+    fn is_maximized(&self) -> bool {
+        self.with_window(|window| window.is_maximized())
+    }
+
+    fn window_bounds(&self) -> WindowBounds {
+        self.with_window(|window| window.window_bounds())
+    }
+
+    fn content_size(&self) -> Size<Pixels> {
+        self.with_window(|window| window.content_size())
+    }
+
+    fn resize(&mut self, size: Size<Pixels>) {
+        self.with_window_mut(|window| window.resize(size))
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.with_window(|window| window.scale_factor())
+    }
+
+    fn appearance(&self) -> WindowAppearance {
+        self.with_window(|window| window.appearance())
+    }
+
+    fn display(&self) -> Option<Rc<dyn PlatformDisplay>> {
+        self.with_window(|window| window.display())
+    }
+
+    fn mouse_position(&self) -> Point<Pixels> {
+        self.with_window(|window| window.mouse_position())
+    }
+
+    fn modifiers(&self) -> Modifiers {
+        self.with_window(|window| window.modifiers())
+    }
+
+    fn capslock(&self) -> Capslock {
+        self.with_window(|window| window.capslock())
+    }
+
+    fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
+        *self.input_handler.borrow_mut() = Some(input_handler);
+    }
+
+    fn take_input_handler(&mut self) -> Option<PlatformInputHandler> {
+        self.input_handler.borrow_mut().take()
+    }
+
+    fn prompt(
+        &self,
+        level: PromptLevel,
+        msg: &str,
+        detail: Option<&str>,
+        answers: &[PromptButton],
+    ) -> Option<oneshot::Receiver<usize>> {
+        self.with_window(|window| window.prompt(level, msg, detail, answers))
+    }
+
+    fn activate(&self) {
+        self.with_window(|window| window.activate())
+    }
+
+    fn is_active(&self) -> bool {
+        self.with_window(|window| window.is_active())
+    }
+
+    fn is_hovered(&self) -> bool {
+        self.with_window(|window| window.is_hovered())
+    }
+
+    fn background_appearance(&self) -> WindowBackgroundAppearance {
+        self.with_window(|window| window.background_appearance())
+    }
+
+    fn set_title(&mut self, title: &str) {
+        self.with_window_mut(|window| window.set_title(title))
+    }
+
+    fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
+        self.with_window(|window| window.set_background_appearance(background_appearance))
+    }
+
+    fn minimize(&self) {
+        self.with_window(|window| window.minimize())
+    }
+
+    fn zoom(&self) {
+        self.with_window(|window| window.zoom())
+    }
+
+    fn toggle_fullscreen(&self) {
+        self.with_window(|window| window.toggle_fullscreen())
+    }
+
+    fn is_fullscreen(&self) -> bool {
+        self.with_window(|window| window.is_fullscreen())
+    }
+
+    fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
+        self.with_window(|window| window.on_request_frame(callback))
+    }
+
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>) {
+        self.with_window(|window| window.on_input(callback))
+    }
+
+    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>) {
+        self.with_window(|window| window.on_active_status_change(callback))
+    }
+
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>) {
+        self.with_window(|window| window.on_hover_status_change(callback))
+    }
+
+    fn visibility(&self) -> WindowVisibility {
+        self.with_window(|window| window.visibility())
+    }
+
+    fn on_visibility_change(&self, callback: Box<dyn FnMut(WindowVisibility)>) {
+        self.with_window(|window| window.on_visibility_change(callback))
+    }
+
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32)>) {
+        self.with_window(|window| window.on_resize(callback))
+    }
+
+    fn on_moved(&self, callback: Box<dyn FnMut()>) {
+        self.with_window(|window| window.on_moved(callback))
+    }
+
+    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool>) {
+        self.with_window(|window| window.on_should_close(callback))
+    }
+
+    fn on_hit_test_window_control(&self, callback: Box<dyn FnMut() -> Option<WindowControlArea>>) {
+        self.with_window(|window| window.on_hit_test_window_control(callback))
+    }
+
+    fn on_close(&self, callback: Box<dyn FnOnce()>) {
+        self.with_window(|window| window.on_close(callback))
+    }
+
+    fn on_appearance_changed(&self, callback: Box<dyn FnMut()>) {
+        self.with_window(|window| window.on_appearance_changed(callback))
+    }
+
+    fn draw(&self, scene: &Scene) {
+        self.with_window(|window| window.draw(scene))
+    }
+
+    fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
+        self.with_window(|window| window.sprite_atlas())
+    }
+
+    fn gpu_specs(&self) -> Option<GpuSpecs> {
+        self.with_window(|window| window.gpu_specs())
+    }
+
+    fn is_subpixel_rendering_supported(&self) -> bool {
+        self.with_window(|window| window.is_subpixel_rendering_supported())
+    }
+
+    fn update_ime_position(&self, bounds: Bounds<Pixels>) {
+        self.with_window(|window| window.update_ime_position(bounds))
+    }
+
+    fn show_soft_keyboard(&self) {
+        self.with_window(|window| window.show_soft_keyboard())
+    }
+
+    fn hide_soft_keyboard(&self) {
+        self.with_window(|window| window.hide_soft_keyboard())
+    }
+
+    fn text_input_state_changed(&self, change: TextInputStateChange) {
+        self.with_window(|window| window.text_input_state_changed(change))
+    }
+}
+
+impl PlatformWindow for OhosWindow {
+    fn bounds(&self) -> Bounds<Pixels> {
+        *self.bounds.borrow()
+    }
+
+    fn is_maximized(&self) -> bool {
+        false
+    }
+
+    fn window_bounds(&self) -> WindowBounds {
+        WindowBounds::Windowed(*self.bounds.borrow())
+    }
+
+    fn content_size(&self) -> Size<Pixels> {
+        self.effective_content_size()
+    }
+
+    fn resize(&mut self, size: Size<Pixels>) {
+        let origin = self.bounds.borrow().origin;
+        *self.bounds.borrow_mut() = Bounds::new(origin, size);
+    }
+
+    fn scale_factor(&self) -> f32 {
+        *self.scale.borrow()
+    }
+
+    fn appearance(&self) -> WindowAppearance {
+        WindowAppearance::Light
+    }
+
+    fn display(&self) -> Option<Rc<dyn PlatformDisplay>> {
+        if let Some(app) = self.app.borrow().clone() {
+            Some(Rc::new(OhosDisplay::new(app)))
+        } else {
+            None
+        }
+    }
+
+    fn mouse_position(&self) -> Point<Pixels> {
+        self.pointer_position
+            .get()
+            .unwrap_or_else(|| point(px(0.0), px(0.0)))
+    }
+
+    fn modifiers(&self) -> Modifiers {
+        Modifiers::default()
+    }
+
+    fn capslock(&self) -> Capslock {
+        Capslock::default()
+    }
+
+    fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
+        *self.input_handler.borrow_mut() = Some(input_handler);
+    }
+
+    fn take_input_handler(&mut self) -> Option<PlatformInputHandler> {
+        self.input_handler.borrow_mut().take()
+    }
+
+    fn prompt(
+        &self,
+        _level: PromptLevel,
+        _msg: &str,
+        _detail: Option<&str>,
+        _answers: &[PromptButton],
+    ) -> Option<oneshot::Receiver<usize>> {
+        None
+    }
+
+    fn activate(&self) {
+        // Not supported on OHOS
+    }
+
+    fn is_active(&self) -> bool {
+        true
+    }
+
+    fn visibility(&self) -> WindowVisibility {
+        WindowVisibility::Visible
+    }
+
+    fn is_hovered(&self) -> bool {
+        false
+    }
+
+    fn background_appearance(&self) -> WindowBackgroundAppearance {
+        WindowBackgroundAppearance::Opaque
+    }
+
+    fn set_title(&mut self, _title: &str) {
+        // Not supported on OHOS
+    }
+
+    fn set_background_appearance(&self, _background_appearance: WindowBackgroundAppearance) {
+        // Not supported on OHOS
+    }
+
+    fn minimize(&self) {
+        // Not supported on OHOS
+    }
+
+    fn zoom(&self) {
+        // Not supported on OHOS
+    }
+
+    fn toggle_fullscreen(&self) {
+        // Not supported on OHOS
+    }
+
+    fn is_fullscreen(&self) -> bool {
+        false
+    }
+
+    fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
+        self.callbacks.borrow_mut().request_frame = Some(callback);
+    }
+
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>) {
+        self.callbacks.borrow_mut().input = Some(callback);
+    }
+
+    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>) {
+        self.callbacks.borrow_mut().active_status_change = Some(callback);
+    }
+
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>) {
+        self.callbacks.borrow_mut().hover_status_change = Some(callback);
+    }
+
+    fn on_visibility_change(&self, callback: Box<dyn FnMut(WindowVisibility)>) {
+        self.callbacks.borrow_mut().visibility_change = Some(callback);
+    }
+
+    fn show_soft_keyboard(&self) {
+        // This is an explicit user-gesture request. Do not suppress it based
+        // on cached visibility: the system can dismiss the IME while GPUI
+        // focus remains on the same input.
+        self.request_keyboard();
+    }
+
+    fn hide_soft_keyboard(&self) {
+        self.hide_keyboard_if_needed();
+    }
+
+    fn text_input_state_changed(&self, change: TextInputStateChange) {
+        match change {
+            TextInputStateChange::FocusGained => self.show_keyboard_if_needed(),
+            TextInputStateChange::FocusLost => self.hide_keyboard_if_needed(),
+            TextInputStateChange::SelectionChanged | TextInputStateChange::ContentChanged => {}
+        }
+    }
+
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32)>) {
+        self.callbacks.borrow_mut().resize = Some(callback);
+    }
+
+    fn on_moved(&self, callback: Box<dyn FnMut()>) {
+        self.callbacks.borrow_mut().moved = Some(callback);
+    }
+
+    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool>) {
+        self.callbacks.borrow_mut().should_close = Some(callback);
+    }
+
+    fn on_hit_test_window_control(&self, callback: Box<dyn FnMut() -> Option<WindowControlArea>>) {
+        self.callbacks.borrow_mut().hit_test_window_control = Some(callback);
+    }
+
+    fn on_close(&self, callback: Box<dyn FnOnce()>) {
+        self.callbacks.borrow_mut().close = Some(callback);
+    }
+
+    fn on_appearance_changed(&self, callback: Box<dyn FnMut()>) {
+        self.callbacks.borrow_mut().appearance_changed = Some(callback);
+    }
+
+    fn draw(&self, scene: &Scene) {
+        // Initialize renderer lazily if not already initialized
+        // This ensures native_window is available (after SurfaceCreate event)
+        if self.renderer.borrow().is_none() {
+            if let Err(e) = self.initialize_renderer() {
+                warn!("OhosWindow: Failed to initialize renderer in draw(): {}", e);
+                return;
+            }
+        }
+
+        // Use WGPU renderer to render the scene.
+        if let Some(ref mut renderer) = *self.renderer.borrow_mut() {
+            renderer.draw(scene);
+        } else {
+            warn!("OhosWindow: draw called but renderer is not available");
+        }
+    }
+
+    fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
+        if let Some(ref renderer) = *self.renderer.borrow() {
+            renderer.sprite_atlas().clone()
+        } else {
+            if let Err(error) = self.initialize_renderer() {
+                panic!("OhosWindow: renderer must be initialized before sprite_atlas: {error}");
+            }
+            self.renderer
+                .borrow()
+                .as_ref()
+                .expect("renderer should be initialized after initialize_renderer")
+                .sprite_atlas()
+                .clone()
+        }
+    }
+
+    fn request_decorations(&self, _decorations: WindowDecorations) {
+        // Not supported on OHOS
+    }
+
+    fn show_window_menu(&self, _position: Point<Pixels>) {
+        // Not supported on OHOS
+    }
+
+    fn start_window_move(&self) {
+        // Not supported on OHOS
+    }
+
+    fn start_window_resize(&self, _edge: ResizeEdge) {
+        // Not supported on OHOS
+    }
+
+    fn window_decorations(&self) -> crate::Decorations {
+        crate::Decorations::Server
+    }
+
+    fn set_app_id(&mut self, _app_id: &str) {
+        // Not supported on OHOS
+    }
+
+    fn map_window(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    fn window_controls(&self) -> WindowControls {
+        WindowControls {
+            fullscreen: false,
+            maximize: false,
+            minimize: false,
+            window_menu: false,
+        }
+    }
+
+    fn set_client_inset(&self, _inset: Pixels) {
+        // Keyboard avoidance is driven by content_size updates from avoid-area overlap.
+        // client_inset is intentionally ignored on OHOS.
+    }
+
+    fn gpu_specs(&self) -> Option<GpuSpecs> {
+        // Return GPU specs from the WGPU renderer.
+        self.renderer
+            .borrow()
+            .as_ref()
+            .map(|renderer| renderer.gpu_specs())
+    }
+
+    fn is_subpixel_rendering_supported(&self) -> bool {
+        false
+    }
+
+    fn update_ime_position(&self, _bounds: Bounds<Pixels>) {
+        // There is no such thing on Windows.
+    }
+}

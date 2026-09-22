@@ -1,0 +1,63 @@
+[workspace]
+members = ["."]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+bytemuck = "1"
+cosmic-text = "0.17.0"
+etagere = "0.2"
+font-kit = { package = "zed-font-kit", version = "0.14.1-zed", git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", features = ["source-fontconfig-dlopen"] }
+futures = "0.3.34"
+gpui = { git = "https://github.com/ohos-rs/zed", rev = "59e51d0ff624b9c1de01236bc77bc6caf9efce42", default-features = false }
+itertools = "0.14.0"
+log = "0.4"
+openharmony-ability = "1.0.0-beta.2"
+openharmony-ability-plugin-app-control = "1.0.0-beta.1"
+parking_lot = "0.12.1"
+profiling = "1"
+raw-window-handle = "0.6"
+rustc-hash = "2"
+smallvec = { version = "1.6", features = ["union", "const_new"] }
+smol = "2.0"
+uuid = { version = "1.1.2", features = ["v4", "v5", "v7", "serde"] }
+wgpu = "29.0.4"
+
+[package]
+name = "gpui-ohos"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "OpenHarmony platform support for GPUI"
+repository = "https://github.com/ohos-rs/gpui-ohos"
+
+[lib]
+name = "gpui_ohos"
+path = "src/gpui_ohos.rs"
+
+[dependencies]
+gpui.workspace = true
+anyhow.workspace = true
+bytemuck.workspace = true
+cosmic-text.workspace = true
+etagere.workspace = true
+font-kit.workspace = true
+futures.workspace = true
+itertools.workspace = true
+log.workspace = true
+openharmony-ability.workspace = true
+openharmony-ability-plugin-app-control.workspace = true
+parking_lot.workspace = true
+profiling.workspace = true
+raw-window-handle.workspace = true
+rustc-hash.workspace = true
+smallvec.workspace = true
+smol.workspace = true
+uuid.workspace = true
+wgpu.workspace = true
