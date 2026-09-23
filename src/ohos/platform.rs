@@ -36,7 +36,7 @@ use crate::{
 };
 
 use super::{
-    dispatcher::OhosDispatcher, display::OhosDisplay, text_system::OhosTextSystem,
+    dispatcher::OhosDispatcher, display::OhosDisplay, screen_capture, text_system::OhosTextSystem,
     wgpu_context::WgpuContext, window::OhosWindow,
 };
 
@@ -587,16 +587,25 @@ impl Platform for OhosPlatform {
     }
 
     fn is_screen_capture_supported(&self) -> bool {
-        false
+        self.app.borrow().as_ref().is_some_and(|app| {
+            let (width, height) = app.display_size();
+            i32::try_from(width).is_ok_and(|width| width > 0)
+                && i32::try_from(height).is_ok_and(|height| height > 0)
+        })
     }
 
     fn screen_capture_sources(
         &self,
     ) -> oneshot::Receiver<GpuiResult<Vec<Rc<dyn crate::ScreenCaptureSource>>>> {
-        let (tx, rx) = oneshot::channel();
-        tx.send(Err(anyhow::anyhow!("Screen capture not supported on OHOS")))
-            .ok();
-        rx
+        if let Some(app) = self.app.borrow().as_ref() {
+            let (width, height) = app.display_size();
+            screen_capture::sources(
+                i32::try_from(width).unwrap_or(0),
+                i32::try_from(height).unwrap_or(0),
+            )
+        } else {
+            screen_capture::sources(0, 0)
+        }
     }
 
     fn open_window(

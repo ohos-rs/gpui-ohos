@@ -54,6 +54,7 @@ pub(crate) struct OhosWindow {
     active: Cell<bool>,
     hovered: Cell<bool>,
     visibility: Cell<WindowVisibility>,
+    decorations: Rc<Cell<WindowDecorations>>,
     insets: RefCell<WindowInsets>,
     keyboard_overlap_device_px: Cell<i32>,
     input_handler: Rc<RefCell<Option<PlatformInputHandler>>>,
@@ -278,6 +279,7 @@ impl OhosWindow {
             active: Cell::new(window_id == 0),
             hovered: Cell::new(false),
             visibility: Cell::new(WindowVisibility::Visible),
+            decorations: Rc::new(Cell::new(WindowDecorations::Server)),
             insets: RefCell::new(WindowInsets::default()),
             keyboard_overlap_device_px: Cell::new(0),
             input_handler: Rc::new(RefCell::new(None)),
@@ -1958,8 +1960,26 @@ impl PlatformWindow for OhosWindow {
         }
     }
 
-    fn request_decorations(&self, _decorations: WindowDecorations) {
-        // Not supported on OHOS
+    fn request_decorations(&self, decorations: WindowDecorations) {
+        if self.window_id == 0 {
+            return;
+        }
+        let Some(client) = self.window_client() else {
+            return;
+        };
+        let window_id = self.window_id;
+        let state = self.decorations.clone();
+        self.foreground_executor
+            .spawn(async move {
+                match client
+                    .set_window_decorations(window_id, decorations == WindowDecorations::Server)
+                    .await
+                {
+                    Ok(()) => state.set(decorations),
+                    Err(error) => warn!("Failed to set OHOS window decorations: {error}"),
+                }
+            })
+            .detach();
     }
 
     fn show_window_menu(&self, _position: Point<Pixels>) {
@@ -1975,7 +1995,13 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn window_decorations(&self) -> crate::Decorations {
-        crate::Decorations::Server
+        if self.decorations.get() == WindowDecorations::Client {
+            crate::Decorations::Client {
+                tiling: Default::default(),
+            }
+        } else {
+            crate::Decorations::Server
+        }
     }
 
     fn set_app_id(&mut self, _app_id: &str) {
@@ -1988,9 +2014,9 @@ impl PlatformWindow for OhosWindow {
 
     fn window_controls(&self) -> WindowControls {
         WindowControls {
-            fullscreen: false,
-            maximize: false,
-            minimize: false,
+            fullscreen: self.window_id != 0,
+            maximize: self.window_id != 0,
+            minimize: self.window_id != 0,
             window_menu: false,
         }
     }
