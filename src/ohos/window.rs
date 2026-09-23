@@ -680,6 +680,26 @@ impl OhosWindow {
         }
     }
 
+    fn request_resize(&self, size: Size<Pixels>) {
+        let Some(client) = self.window_client() else {
+            return;
+        };
+        let scale = self.scale_factor();
+        let width = (size.width.as_f32() * scale).round() as i64;
+        let height = (size.height.as_f32() * scale).round() as i64;
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        let window_id = self.window_id;
+        self.foreground_executor
+            .spawn(async move {
+                if let Err(error) = client.resize_window(window_id, width, height).await {
+                    warn!("Failed to resize OHOS window {window_id}: {error}");
+                }
+            })
+            .detach();
+    }
+
     fn restore_cursor_after_move(&self) {
         if !self.cursor_hidden_until_move.replace(false) {
             return;
@@ -1234,7 +1254,7 @@ impl PlatformWindow for OhosWindowHandle {
     }
 
     fn resize(&mut self, size: Size<Pixels>) {
-        self.with_window_mut(|window| window.resize(size))
+        self.with_window(|window| window.request_resize(size))
     }
 
     fn scale_factor(&self) -> f32 {
@@ -1418,23 +1438,7 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn resize(&mut self, size: Size<Pixels>) {
-        let Some(client) = self.window_client() else {
-            return;
-        };
-        let scale = self.scale_factor();
-        let width = (size.width.as_f32() * scale).round() as i64;
-        let height = (size.height.as_f32() * scale).round() as i64;
-        if width <= 0 || height <= 0 {
-            return;
-        }
-        let window_id = self.window_id;
-        self.foreground_executor
-            .spawn(async move {
-                if let Err(error) = client.resize_window(window_id, width, height).await {
-                    warn!("Failed to resize OHOS window {window_id}: {error}");
-                }
-            })
-            .detach();
+        self.request_resize(size);
     }
 
     fn scale_factor(&self) -> f32 {
