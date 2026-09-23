@@ -1509,6 +1509,7 @@ dependencies = [
  "log",
  "openharmony-ability",
  "openharmony-ability-plugin-app-control",
+ "openharmony-ability-plugin-url",
  "parking_lot",
  "profiling",
  "raw-window-handle",
@@ -2670,6 +2671,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ohos-image-native-binding"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0de7506ff6218182c1f97b3900831358051dded225909b50a61cf862cebd262b"
+dependencies = [
+ "libc",
+ "napi-sys-ohos",
+ "ohos-enum-derive",
+ "ohos-image-native-sys",
+ "ohos-native-buffer-binding",
+ "ohos-native-buffer-sys",
+ "ohos-resource-manager-sys",
+]
+
+[[package]]
 name = "ohos-image-native-sys"
 version = "0.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2708,6 +2724,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97c6c1bbab01c0d6ba34d865568342808f12f187f2aa9c906ccb1dc72aeba69f"
 
 [[package]]
+name = "ohos-multi-modal-input-sys"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f898bc22f696dcf94e022f67e8bb84737011e763b608f84e723aa454874cc036"
+dependencies = [
+ "ohos-image-native-sys",
+]
+
+[[package]]
+name = "ohos-native-buffer-binding"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce5cdb283c6dad8483eee311d258c88fbda091d601b1a0ca9f84e6e01e795f16"
+dependencies = [
+ "ohos-native-buffer-sys",
+ "ohos-native-window-sys",
+]
+
+[[package]]
 name = "ohos-native-buffer-sys"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2721,6 +2756,34 @@ checksum = "147856c7a508af8c775b7679eb0effd500521204943e7f26846f18f10c20bf99"
 dependencies = [
  "ohos-image-native-sys",
  "ohos-image-sys",
+]
+
+[[package]]
+name = "ohos-native-window-manager-sys"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06509635f7ffef25be1729c51f6d08a6ce0e48fa5e37e5284676450465724175"
+dependencies = [
+ "ohos-multi-modal-input-sys",
+]
+
+[[package]]
+name = "ohos-native-window-sys"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1118984263856b11ebd9fbfb35911c10d74ef55778a67be06f1bce09fb5325da"
+dependencies = [
+ "ohos-native-buffer-sys",
+]
+
+[[package]]
+name = "ohos-resource-manager-binding"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d30de59b15cc8e486143cd89c64703b115f600bd9b9c4146c93cb2898da312e"
+dependencies = [
+ "napi-ohos",
+ "ohos-resource-manager-sys",
 ]
 
 [[package]]
@@ -2739,6 +2802,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc817f2833bd8ff7f6598fc22794e045a58b643f08d33b0a8549daa517912fae"
 dependencies = [
  "ohos-image-native-sys",
+]
+
+[[package]]
+name = "ohos-window-manager-binding"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19cff69265d03b3d23bf8ce4fa4d6d97cb1a6f9858c44f5987d56ece8114d389"
+dependencies = [
+ "ohos-enum-derive",
+ "ohos-image-native-binding",
+ "ohos-native-window-manager-sys",
 ]
 
 [[package]]
@@ -2776,23 +2850,41 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "openharmony-ability"
 version = "1.0.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fa54305105683c0fb7986ab22f935f007066bf7c69b46b55913cac055e2e522"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=ea5d815025d3cf349176536d22da2bb1a5880af6#ea5d815025d3cf349176536d22da2bb1a5880af6"
 dependencies = [
  "futures-channel",
+ "log",
  "napi-derive-ohos",
  "napi-ohos",
  "ohos-arkui-binding",
+ "ohos-arkui-sys",
  "ohos-display-binding",
  "ohos-ime-binding",
+ "ohos-resource-manager-binding",
+ "ohos-window-manager-binding",
  "ohos-xcomponent-binding",
+ "ohos-xcomponent-sys",
+ "png 0.17.16",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
 name = "openharmony-ability-plugin-app-control"
 version = "1.0.0-beta.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56c61ee993859910271fc7b05655ea202934009c41978480cfb57024a628c5a1"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=ea5d815025d3cf349176536d22da2bb1a5880af6#ea5d815025d3cf349176536d22da2bb1a5880af6"
+dependencies = [
+ "napi-derive-ohos",
+ "napi-ohos",
+ "openharmony-ability",
+]
+
+[[package]]
+name = "openharmony-ability-plugin-url"
+version = "1.0.0-beta.1"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=ea5d815025d3cf349176536d22da2bb1a5880af6#ea5d815025d3cf349176536d22da2bb1a5880af6"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -4145,6 +4237,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
+name = "tokio"
+version = "1.53.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+dependencies = [
+ "pin-project-lite",
+]
+
+[[package]]
 name = "tracing"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4719,7 +4820,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

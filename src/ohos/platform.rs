@@ -9,10 +9,11 @@ use std::{
 
 use anyhow::Result;
 use futures::channel::oneshot;
-use openharmony_ability::{Event, OpenHarmonyApp, TouchInputDelivery};
+use openharmony_ability::{ColorMode, Event, OpenHarmonyApp, TouchInputDelivery};
 use openharmony_ability_plugin_app_control::{
     AppControlBridgePlugin, TerminateRequest, TerminateResponse,
 };
+use openharmony_ability_plugin_url::{UrlBridgePlugin, UrlExt as _};
 
 use crate::{
     Action, ActivityGuard, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle,
@@ -37,6 +38,14 @@ pub(crate) struct OhosPlatform {
     main_receiver: PriorityQueueReceiver<RunnableVariant>,
     gpu_context: Arc<WgpuContext>,
     windows: Rc<RefCell<Vec<Weak<RefCell<OhosWindow>>>>>,
+    open_urls: Rc<RefCell<Option<Box<dyn FnMut(Vec<String>)>>>>,
+}
+
+pub(crate) fn appearance_for_color_mode(mode: ColorMode) -> WindowAppearance {
+    match mode {
+        ColorMode::Dark => WindowAppearance::Dark,
+        ColorMode::Light | ColorMode::NoSet => WindowAppearance::Light,
+    }
 }
 
 impl OhosPlatform {
@@ -69,6 +78,7 @@ impl OhosPlatform {
             main_receiver,
             gpu_context,
             windows: Rc::new(RefCell::new(Vec::new())),
+            open_urls: Rc::new(RefCell::new(None)),
         };
         platform.set_app(app);
         Ok(platform)
@@ -80,6 +90,9 @@ impl OhosPlatform {
         }
         if let Err(error) = app.register_plugin(AppControlBridgePlugin) {
             warn!("Failed to register OpenHarmony app-control plugin: {error}");
+        }
+        if let Err(error) = app.register_plugin(UrlBridgePlugin) {
+            warn!("Failed to register OpenHarmony URL plugin: {error}");
         }
         *self.app.borrow_mut() = Some(app.clone());
         // Initialize primary display when app is set
@@ -97,6 +110,15 @@ impl OhosPlatform {
     }
 
     fn handle_ohos_event(&self, event: &Event, on_finish_launching: Option<Box<dyn FnOnce()>>) {
+        if let Event::NewWant { uri } = event
+            && !uri.is_empty()
+        {
+            let mut callback = self.open_urls.borrow_mut().take();
+            if let Some(ref mut callback) = callback {
+                callback(vec![uri.clone()]);
+            }
+            *self.open_urls.borrow_mut() = callback;
+        }
         // create_waker() snapshots the lifecycle's current ThreadsafeFunction. Refresh it once
         // the surface exists so timers scheduled during early startup can reliably wake the UI
         // thread even if the first snapshot was taken before lifecycle initialization finished.
@@ -173,6 +195,7 @@ impl Clone for OhosPlatform {
             main_receiver: self.main_receiver.clone(),
             gpu_context: self.gpu_context.clone(),
             windows: self.windows.clone(),
+            open_urls: self.open_urls.clone(),
         }
     }
 }
@@ -336,16 +359,39 @@ impl Platform for OhosPlatform {
     }
 
     fn window_appearance(&self) -> WindowAppearance {
-        WindowAppearance::Light
+        self.app
+            .borrow()
+            .as_ref()
+            .map(|app| appearance_for_color_mode(app.config().color_mode))
+            .unwrap_or_default()
     }
 
     fn open_url(&self, url: &str) {
-        // Not supported on OHOS
-        warn!("open_url not supported on OHOS: {}", url);
+        let Some(app) = self.app.borrow().clone() else {
+            warn!("Cannot open URL before OpenHarmonyApp is set: {url}");
+            return;
+        };
+        let url = url.to_owned();
+        self.background_executor
+            .spawn(async move {
+                if let Err(error) = app.open_url(url).await {
+                    warn!("Failed to open URL on OHOS: {error}");
+                }
+            })
+            .detach();
     }
 
-    fn on_open_urls(&self, _callback: Box<dyn FnMut(Vec<String>)>) {
-        // Not supported on OHOS
+    fn on_open_urls(&self, mut callback: Box<dyn FnMut(Vec<String>)>) {
+        let initial_uri = self
+            .app
+            .borrow()
+            .as_ref()
+            .map(OpenHarmonyApp::take_initial_want_uri)
+            .unwrap_or_default();
+        if !initial_uri.is_empty() {
+            callback(vec![initial_uri]);
+        }
+        *self.open_urls.borrow_mut() = Some(callback);
     }
 
     fn register_url_scheme(&self, _url: &str) -> Task<Result<()>> {

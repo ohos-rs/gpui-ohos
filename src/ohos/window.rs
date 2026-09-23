@@ -21,6 +21,7 @@ use openharmony_ability::{
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::display::OhosDisplay;
+use super::platform::appearance_for_color_mode;
 use super::wgpu_context::WgpuContext;
 use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
 use crate::{
@@ -37,6 +38,7 @@ pub(crate) struct OhosWindow {
     app: Rc<RefCell<Option<OpenHarmonyApp>>>,
     bounds: RefCell<Bounds<Pixels>>,
     scale: RefCell<f32>,
+    appearance: Cell<WindowAppearance>,
     keyboard_overlap_device_px: Cell<i32>,
     input_handler: Rc<RefCell<Option<PlatformInputHandler>>>,
     callbacks: Rc<RefCell<WindowCallbacks>>,
@@ -109,6 +111,11 @@ impl OhosWindow {
             .as_ref()
             .map(|a| a.scale() as f32)
             .unwrap_or(1.0);
+        let appearance = app
+            .borrow()
+            .as_ref()
+            .map(|app| appearance_for_color_mode(app.config().color_mode))
+            .unwrap_or_default();
         let bounds = params.bounds;
 
         // Don't create renderer immediately - native_window may not be available yet.
@@ -119,6 +126,7 @@ impl OhosWindow {
             app: app.clone(),
             bounds: RefCell::new(bounds),
             scale: RefCell::new(scale),
+            appearance: Cell::new(appearance),
             keyboard_overlap_device_px: Cell::new(0),
             input_handler: Rc::new(RefCell::new(None)),
             callbacks: Rc::new(RefCell::new(WindowCallbacks {
@@ -396,7 +404,7 @@ impl OhosWindow {
         if layout_height <= 0 {
             return Some(0);
         }
-        let window_rect = app.window_rect();
+        let window_rect = app.window_rect_for(0);
         let window_top = window_rect.top;
         let window_bottom = window_rect.top.saturating_add(window_rect.height.max(0));
 
@@ -683,7 +691,10 @@ impl OhosWindow {
                     self.emit_resize_callback();
                 }
             }
-            Event::WindowResize(ohos_size) => {
+            Event::WindowResize {
+                window_id: 0,
+                size: ohos_size,
+            } => {
                 // openharmony-ability currently maps both the ArkTS windowSizeChange callback and
                 // the XComponent surface callback to WindowResize. In a floating 2-in-1 window the
                 // former includes the server-side title bar, while the native render surface does
@@ -783,7 +794,15 @@ impl OhosWindow {
                     self.emit_resize_callback();
                 }
             }
-            Event::ConfigChanged(..) => {
+            Event::ConfigChanged(configuration) => {
+                let appearance = appearance_for_color_mode(configuration.color_mode);
+                if self.appearance.replace(appearance) != appearance {
+                    let mut callback = self.callbacks.borrow_mut().appearance_changed.take();
+                    if let Some(ref mut callback) = callback {
+                        callback();
+                    }
+                    self.callbacks.borrow_mut().appearance_changed = callback;
+                }
                 let new_scale = self
                     .app
                     .borrow()
@@ -1226,7 +1245,7 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        WindowAppearance::Light
+        self.appearance.get()
     }
 
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>> {

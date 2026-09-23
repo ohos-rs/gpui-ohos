@@ -13,10 +13,11 @@ test = false
 
 [dependencies]
 gpui-ohos = { path = "..", default-features = false }
+log = "0.4"
 napi-derive-ohos = "=1.2.0"
 napi-ohos = "=1.2.0"
-openharmony-ability = "1.0.0-beta.2"
-openharmony-ability-derive = "1.0.0-beta.1"
+openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "ea5d815025d3cf349176536d22da2bb1a5880af6" }
+openharmony-ability-derive = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "ea5d815025d3cf349176536d22da2bb1a5880af6" }
 
 [features]
 default = ["gles"]
