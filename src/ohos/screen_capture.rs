@@ -1,10 +1,11 @@
 use std::{
+    collections::HashMap,
     ffi::c_void,
     panic::{AssertUnwindSafe, catch_unwind},
     ptr,
     rc::Rc,
     sync::{
-        Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -19,8 +20,12 @@ use image::RgbaImage;
 use log::{error, info, warn};
 
 static RECEIVED_VIDEO_BUFFERS: AtomicUsize = AtomicUsize::new(0);
+static CAPTURE_CALLBACKS: OnceLock<Mutex<HashMap<usize, Arc<CaptureCallbacks>>>> = OnceLock::new();
 
-const VIDEO_BUFFER: i32 = 0;
+fn capture_callbacks() -> &'static Mutex<HashMap<usize, Arc<CaptureCallbacks>>> {
+    CAPTURE_CALLBACKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 const RGBA_8888: i32 = 12;
 const RGBX_8888: i32 = 11;
 const BGRA_8888: i32 = 20;
@@ -28,11 +33,6 @@ const BGRX_8888: i32 = 19;
 
 #[repr(C)]
 struct NativeScreenCapture {
-    _private: [u8; 0],
-}
-
-#[repr(C)]
-struct AvBuffer {
     _private: [u8; 0],
 }
 
@@ -110,6 +110,21 @@ struct ScreenCaptureConfig {
     recorder: RecorderInfo,
 }
 
+#[repr(C)]
+struct Rect {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+#[repr(C)]
+struct LegacyCaptureCallbacks {
+    on_error: Option<unsafe extern "C" fn(*mut NativeScreenCapture, i32)>,
+    on_audio: Option<unsafe extern "C" fn(*mut NativeScreenCapture, bool, i32)>,
+    on_video: Option<unsafe extern "C" fn(*mut NativeScreenCapture, bool)>,
+}
+
 #[link(name = "native_avscreen_capture")]
 unsafe extern "C" {
     fn OH_AVScreenCapture_Create() -> *mut NativeScreenCapture;
@@ -120,16 +135,16 @@ unsafe extern "C" {
     fn OH_AVScreenCapture_StartScreenCapture(capture: *mut NativeScreenCapture) -> i32;
     fn OH_AVScreenCapture_StopScreenCapture(capture: *mut NativeScreenCapture) -> i32;
     fn OH_AVScreenCapture_Release(capture: *mut NativeScreenCapture) -> i32;
-    fn OH_AVScreenCapture_SetDataCallback(
+    fn OH_AVScreenCapture_AcquireVideoBuffer(
         capture: *mut NativeScreenCapture,
-        callback: unsafe extern "C" fn(
-            *mut NativeScreenCapture,
-            *mut AvBuffer,
-            i32,
-            i64,
-            *mut c_void,
-        ),
-        user_data: *mut c_void,
+        fence: *mut i32,
+        timestamp: *mut i64,
+        region: *mut Rect,
+    ) -> *mut NativeBuffer;
+    fn OH_AVScreenCapture_ReleaseVideoBuffer(capture: *mut NativeScreenCapture) -> i32;
+    fn OH_AVScreenCapture_SetCallback(
+        capture: *mut NativeScreenCapture,
+        callbacks: LegacyCaptureCallbacks,
     ) -> i32;
     fn OH_AVScreenCapture_SetStateCallback(
         capture: *mut NativeScreenCapture,
@@ -141,11 +156,6 @@ unsafe extern "C" {
         callback: unsafe extern "C" fn(*mut NativeScreenCapture, i32, *mut c_void),
         user_data: *mut c_void,
     ) -> i32;
-}
-
-#[link(name = "native_media_core")]
-unsafe extern "C" {
-    fn OH_AVBuffer_GetNativeBuffer(buffer: *mut AvBuffer) -> *mut NativeBuffer;
 }
 
 #[link(name = "native_buffer")]
@@ -215,7 +225,7 @@ pub(super) fn sources(
 
 struct OhosScreenCaptureStream {
     capture: *mut NativeScreenCapture,
-    callbacks: *mut CaptureCallbacks,
+    callbacks: Arc<CaptureCallbacks>,
     metadata: SourceMetadata,
     started: bool,
 }
@@ -227,9 +237,9 @@ impl OhosScreenCaptureStream {
     ) -> Result<Self> {
         let capture = unsafe { OH_AVScreenCapture_Create() };
         ensure!(!capture.is_null(), "OHOS AVScreenCapture is unavailable");
-        let callbacks = Box::into_raw(Box::new(CaptureCallbacks {
+        let callbacks = Arc::new(CaptureCallbacks {
             frame: Mutex::new(frame_callback),
-        }));
+        });
         let mut stream = Self {
             capture,
             callbacks,
@@ -281,9 +291,18 @@ impl OhosScreenCaptureStream {
             unsafe { OH_AVScreenCapture_Init(capture, config) },
             "initialize capture",
         )?;
-        let user_data = callbacks.cast::<c_void>();
+        let user_data = Arc::as_ptr(&stream.callbacks) as *mut c_void;
         check(
-            unsafe { OH_AVScreenCapture_SetDataCallback(capture, on_buffer, user_data) },
+            unsafe {
+                OH_AVScreenCapture_SetCallback(
+                    capture,
+                    LegacyCaptureCallbacks {
+                        on_error: None,
+                        on_audio: None,
+                        on_video: Some(on_video_ready),
+                    },
+                )
+            },
             "register video callback",
         )?;
         check(
@@ -294,6 +313,10 @@ impl OhosScreenCaptureStream {
             unsafe { OH_AVScreenCapture_SetErrorCallback(capture, on_error, user_data) },
             "register error callback",
         )?;
+        capture_callbacks()
+            .lock()
+            .map_err(|_| anyhow::anyhow!("OHOS screen capture registry is poisoned"))?
+            .insert(capture as usize, stream.callbacks.clone());
         check(
             unsafe { OH_AVScreenCapture_StartScreenCapture(capture) },
             "start capture",
@@ -321,8 +344,9 @@ impl Drop for OhosScreenCaptureStream {
         if result != 0 {
             warn!("Failed to release OHOS screen capture: {result}");
         }
-        // Release joins native callback execution before callback storage is freed.
-        unsafe { drop(Box::from_raw(self.callbacks)) };
+        if let Ok(mut callbacks) = capture_callbacks().lock() {
+            callbacks.remove(&(self.capture as usize));
+        }
     }
 }
 
@@ -349,33 +373,47 @@ unsafe extern "C" fn on_error(
     error!("OHOS screen capture error: {code}");
 }
 
-unsafe extern "C" fn on_buffer(
-    _capture: *mut NativeScreenCapture,
-    buffer: *mut AvBuffer,
-    buffer_type: i32,
-    _timestamp: i64,
-    user_data: *mut c_void,
-) {
-    if buffer_type != VIDEO_BUFFER || buffer.is_null() || user_data.is_null() {
+unsafe extern "C" fn on_video_ready(capture: *mut NativeScreenCapture, ready: bool) {
+    if !ready || capture.is_null() {
         return;
     }
+    let callbacks = capture_callbacks()
+        .lock()
+        .ok()
+        .and_then(|callbacks| callbacks.get(&(capture as usize)).cloned());
+    let Some(callbacks) = callbacks else { return };
     let count = RECEIVED_VIDEO_BUFFERS.fetch_add(1, Ordering::Relaxed) + 1;
     if count <= 3 {
-        info!("OHOS screen capture received video buffer {count}");
+        info!("OHOS screen capture video buffer ready {count}");
+    }
+    let mut fence = -1;
+    let mut timestamp = 0;
+    let mut region = Rect {
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+    };
+    let buffer = unsafe {
+        OH_AVScreenCapture_AcquireVideoBuffer(capture, &mut fence, &mut timestamp, &mut region)
+    };
+    if buffer.is_null() {
+        warn!("OHOS screen capture reported a frame but acquire returned null");
+        return;
     }
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
-        copy_frame(buffer, &*(user_data as *const CaptureCallbacks))
+        copy_frame(buffer, &callbacks)
     }));
+    let release_result = unsafe { OH_AVScreenCapture_ReleaseVideoBuffer(capture) };
+    if release_result != 0 {
+        warn!("Failed to release OHOS capture frame: {release_result}");
+    }
     if result.is_err() {
         error!("OHOS screen capture frame callback panicked");
     }
 }
 
-unsafe fn copy_frame(buffer: *mut AvBuffer, callbacks: &CaptureCallbacks) {
-    let native = unsafe { OH_AVBuffer_GetNativeBuffer(buffer) };
-    if native.is_null() {
-        return;
-    }
+unsafe fn copy_frame(native: *mut NativeBuffer, callbacks: &CaptureCallbacks) {
     let mut config = NativeBufferConfig::default();
     unsafe { OH_NativeBuffer_GetConfig(native, &mut config) };
     if RECEIVED_VIDEO_BUFFERS.load(Ordering::Relaxed) <= 3 {
