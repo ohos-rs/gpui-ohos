@@ -17,9 +17,13 @@ futures = "0.3.34"
 gpui = { git = "https://github.com/ohos-rs/zed", rev = "59e51d0ff624b9c1de01236bc77bc6caf9efce42", default-features = false }
 itertools = "0.14.0"
 log = "0.4"
-openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "e96d0bf526935de40480f5073517458ad905b243" }
-openharmony-ability-plugin-app-control = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "e96d0bf526935de40480f5073517458ad905b243" }
-openharmony-ability-plugin-url = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "e96d0bf526935de40480f5073517458ad905b243" }
+openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5087a63a0bc05d728940f26feb97f143fa48128a" }
+openharmony-ability-plugin-app-control = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5087a63a0bc05d728940f26feb97f143fa48128a" }
+openharmony-ability-plugin-clipboard = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5087a63a0bc05d728940f26feb97f143fa48128a" }
+openharmony-ability-plugin-files = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5087a63a0bc05d728940f26feb97f143fa48128a" }
+openharmony-ability-plugin-process = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5087a63a0bc05d728940f26feb97f143fa48128a" }
+openharmony-ability-plugin-url = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5087a63a0bc05d728940f26feb97f143fa48128a" }
+openharmony-ability-plugin-window = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5087a63a0bc05d728940f26feb97f143fa48128a" }
 parking_lot = "0.12.1"
 profiling = "1"
 raw-window-handle = "0.6"
@@ -59,7 +63,11 @@ itertools.workspace = true
 log.workspace = true
 openharmony-ability.workspace = true
 openharmony-ability-plugin-app-control.workspace = true
+openharmony-ability-plugin-clipboard.workspace = true
+openharmony-ability-plugin-files.workspace = true
+openharmony-ability-plugin-process.workspace = true
 openharmony-ability-plugin-url.workspace = true
+openharmony-ability-plugin-window.workspace = true
 parking_lot.workspace = true
 profiling.workspace = true
 raw-window-handle.workspace = true
@@ -68,3 +76,10 @@ smallvec.workspace = true
 smol.workspace = true
 uuid.workspace = true
 wgpu.workspace = true
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+ohos-fileuri-binding = "0.1"
+ohos-fileshare-binding = "0.1"
+
+[patch.crates-io]
+ohos-xcomponent-binding = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5087a63a0bc05d728940f26feb97f143fa48128a" }

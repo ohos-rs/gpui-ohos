@@ -1,7 +1,7 @@
 use log::{debug, warn};
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     path::PathBuf,
     rc::{Rc, Weak},
     sync::Arc,
@@ -9,18 +9,27 @@ use std::{
 
 use anyhow::Result;
 use futures::channel::oneshot;
-use openharmony_ability::{ColorMode, Event, OpenHarmonyApp, TouchInputDelivery};
+use openharmony_ability::{
+    ColorMode, Event, OpenHarmonyApp, TouchInputDelivery, WindowCreateParams, create_os_window,
+};
 use openharmony_ability_plugin_app_control::{
     AppControlBridgePlugin, TerminateRequest, TerminateResponse,
 };
+use openharmony_ability_plugin_clipboard::{ClipboardBridgePlugin, ClipboardClient};
+use openharmony_ability_plugin_files::{
+    FileDialogOptions, FilesBridgePlugin, FilesExt as _, dialog_type,
+};
+use openharmony_ability_plugin_process::{ProcessBridgePlugin, ProcessExt as _};
 use openharmony_ability_plugin_url::{UrlBridgePlugin, UrlExt as _};
+use openharmony_ability_plugin_window::{WindowBridgePlugin, WindowClient};
 
 use crate::{
-    Action, ActivityGuard, AnyWindowHandle, BackgroundExecutor, ClipboardItem, CursorStyle,
-    ForegroundExecutor, GestureTuning, Keymap, Menu, MenuItem, OwnedMenu, PathPromptOptions,
-    Platform, PlatformDisplay, PlatformGestures, PlatformKeyboardLayout, PlatformKeyboardMapper,
-    PlatformTextSystem, PlatformWindow, PriorityQueueReceiver, Result as GpuiResult,
-    RunnableVariant, ScrollPhysics, Task, ThermalState, WindowAppearance, WindowParams,
+    Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, ClipboardItem,
+    ClipboardReadError, CursorStyle, ForegroundExecutor, GestureTuning, Keymap, Menu, MenuItem,
+    OwnedMenu, PathPromptOptions, Platform, PlatformDisplay, PlatformGestures,
+    PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow,
+    PriorityQueueReceiver, Result as GpuiResult, RunnableVariant, ScrollPhysics, Task,
+    ThermalState, WindowAppearance, WindowParams,
 };
 
 use super::{
@@ -39,12 +48,38 @@ pub(crate) struct OhosPlatform {
     gpu_context: Arc<WgpuContext>,
     windows: Rc<RefCell<Vec<Weak<RefCell<OhosWindow>>>>>,
     open_urls: Rc<RefCell<Option<Box<dyn FnMut(Vec<String>)>>>>,
+    app_lifecycle: Rc<RefCell<Option<Box<dyn FnMut(AppLifecyclePhase)>>>>,
+    memory_warning: Rc<RefCell<Option<Box<dyn FnMut()>>>>,
+    clipboard_cache: Rc<RefCell<Option<ClipboardItem>>>,
+    cursor_hidden_until_move: Rc<Cell<bool>>,
+    cursor_window_id: Rc<Cell<i64>>,
 }
 
 pub(crate) fn appearance_for_color_mode(mode: ColorMode) -> WindowAppearance {
     match mode {
         ColorMode::Dark => WindowAppearance::Dark,
         ColorMode::Light | ColorMode::NoSet => WindowAppearance::Light,
+    }
+}
+
+fn ohos_cursor_style(style: CursorStyle) -> i32 {
+    match style {
+        CursorStyle::Arrow | CursorStyle::DragLink | CursorStyle::ContextualMenu => 0,
+        CursorStyle::IBeam | CursorStyle::IBeamCursorForVerticalLayout => 26,
+        CursorStyle::Crosshair => 13,
+        CursorStyle::ClosedHand => 17,
+        CursorStyle::OpenHand => 18,
+        CursorStyle::PointingHand => 19,
+        CursorStyle::ResizeLeft => 2,
+        CursorStyle::ResizeRight => 1,
+        CursorStyle::ResizeLeftRight | CursorStyle::ResizeColumn => 5,
+        CursorStyle::ResizeUp => 4,
+        CursorStyle::ResizeDown => 3,
+        CursorStyle::ResizeUpDown | CursorStyle::ResizeRow => 6,
+        CursorStyle::ResizeUpLeftDownRight => 12,
+        CursorStyle::ResizeUpRightDownLeft => 11,
+        CursorStyle::OperationNotAllowed => 15,
+        CursorStyle::DragCopy => 14,
     }
 }
 
@@ -79,6 +114,11 @@ impl OhosPlatform {
             gpu_context,
             windows: Rc::new(RefCell::new(Vec::new())),
             open_urls: Rc::new(RefCell::new(None)),
+            app_lifecycle: Rc::new(RefCell::new(None)),
+            memory_warning: Rc::new(RefCell::new(None)),
+            clipboard_cache: Rc::new(RefCell::new(None)),
+            cursor_hidden_until_move: Rc::new(Cell::new(false)),
+            cursor_window_id: Rc::new(Cell::new(0)),
         };
         platform.set_app(app);
         Ok(platform)
@@ -93,6 +133,16 @@ impl OhosPlatform {
         }
         if let Err(error) = app.register_plugin(UrlBridgePlugin) {
             warn!("Failed to register OpenHarmony URL plugin: {error}");
+        }
+        for result in [
+            app.register_plugin(ClipboardBridgePlugin),
+            app.register_plugin(FilesBridgePlugin),
+            app.register_plugin(ProcessBridgePlugin),
+            app.register_plugin(WindowBridgePlugin),
+        ] {
+            if let Err(error) = result {
+                warn!("Failed to register OpenHarmony platform plugin: {error}");
+            }
         }
         *self.app.borrow_mut() = Some(app.clone());
         // Initialize primary display when app is set
@@ -110,6 +160,27 @@ impl OhosPlatform {
     }
 
     fn handle_ohos_event(&self, event: &Event, on_finish_launching: Option<Box<dyn FnOnce()>>) {
+        let phase = match event {
+            Event::Start => Some(AppLifecyclePhase::Foreground),
+            Event::GainedFocus => Some(AppLifecyclePhase::Active),
+            Event::LostFocus => Some(AppLifecyclePhase::Inactive),
+            Event::Stop => Some(AppLifecyclePhase::Background),
+            _ => None,
+        };
+        if let Some(phase) = phase {
+            let mut callback = self.app_lifecycle.borrow_mut().take();
+            if let Some(ref mut callback) = callback {
+                callback(phase);
+            }
+            *self.app_lifecycle.borrow_mut() = callback;
+        }
+        if matches!(event, Event::LowMemory) {
+            let mut callback = self.memory_warning.borrow_mut().take();
+            if let Some(ref mut callback) = callback {
+                callback();
+            }
+            *self.memory_warning.borrow_mut() = callback;
+        }
         if let Event::NewWant { uri } = event
             && !uri.is_empty()
         {
@@ -164,9 +235,95 @@ impl OhosPlatform {
         }
 
         for window in live_windows {
-            window.borrow().handle_event(event);
+            let id = window.borrow().window_id();
+            match event {
+                Event::SubWindowSurfaceCreate(window_id) if id == *window_id => {
+                    window.borrow().handle_event(&Event::SurfaceCreate)
+                }
+                Event::SubWindowSurfaceDestroy(window_id) if id == *window_id => {
+                    window.borrow().handle_event(&Event::SurfaceDestroy)
+                }
+                Event::SubWindowClosed(window_id) if id == *window_id => {
+                    window.borrow().handle_event(&Event::WindowDestroy)
+                }
+                Event::SubWindowRedraw {
+                    window_id,
+                    interval,
+                } if id == *window_id => window
+                    .borrow()
+                    .handle_event(&Event::WindowRedraw(interval.clone())),
+                Event::SubWindowInput { window_id, event } if id == *window_id => {
+                    self.cursor_window_id.set(id);
+                    window.borrow().handle_event(&Event::Input(event.clone()))
+                }
+                Event::WindowResize { window_id, .. } if id == *window_id => {
+                    window.borrow().handle_event(event)
+                }
+                Event::ContentRectChange(rect) if id == rect.window_id => {
+                    window.borrow().handle_event(event)
+                }
+                Event::SurfaceCreate
+                | Event::SurfaceDestroy
+                | Event::WindowRedraw(_)
+                | Event::WindowDestroy
+                    if id == 0 =>
+                {
+                    window.borrow().handle_event(event)
+                }
+                Event::Input(_) if id == 0 => {
+                    self.cursor_window_id.set(0);
+                    window.borrow().handle_event(event)
+                }
+                Event::SubWindowSurfaceCreate(_)
+                | Event::SubWindowSurfaceDestroy(_)
+                | Event::SubWindowClosed(_)
+                | Event::SubWindowRedraw { .. }
+                | Event::SubWindowInput { .. }
+                | Event::WindowResize { .. }
+                | Event::ContentRectChange(_)
+                | Event::SurfaceCreate
+                | Event::SurfaceDestroy
+                | Event::WindowRedraw(_)
+                | Event::Input(_)
+                | Event::WindowDestroy => {}
+                _ => window.borrow().handle_event(event),
+            }
         }
     }
+}
+
+fn selected_paths(uris: Vec<String>, writable: bool) -> Result<Option<Vec<PathBuf>>> {
+    if uris.is_empty() {
+        return Ok(None);
+    }
+    let operation_mode = if writable { 3 } else { 1 };
+    let policies = uris
+        .iter()
+        .map(|uri| ohos_fileshare_binding::PolicyInfo {
+            uri: uri.clone(),
+            operation_mode,
+        })
+        .collect::<Vec<_>>();
+    let failed = ohos_fileshare_binding::persist_permission(&policies)?;
+    anyhow::ensure!(
+        failed.is_empty(),
+        "Could not persist file picker permission: {failed:?}"
+    );
+    let failed = ohos_fileshare_binding::activate_permission(&policies)?;
+    anyhow::ensure!(
+        failed.is_empty(),
+        "Could not activate file picker permission: {failed:?}"
+    );
+    let paths = uris
+        .iter()
+        .map(|uri| {
+            let native_path = ohos_fileuri_binding::get_path_from_uri(uri)?;
+            let path = PathBuf::from(native_path);
+            anyhow::ensure!(path.is_absolute(), "Picker returned a non-absolute path");
+            Ok(path)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(paths))
 }
 
 struct OhosGestures;
@@ -196,11 +353,24 @@ impl Clone for OhosPlatform {
             gpu_context: self.gpu_context.clone(),
             windows: self.windows.clone(),
             open_urls: self.open_urls.clone(),
+            app_lifecycle: self.app_lifecycle.clone(),
+            memory_warning: self.memory_warning.clone(),
+            clipboard_cache: self.clipboard_cache.clone(),
+            cursor_hidden_until_move: self.cursor_hidden_until_move.clone(),
+            cursor_window_id: self.cursor_window_id.clone(),
         }
     }
 }
 
 impl Platform for OhosPlatform {
+    fn on_app_lifecycle(&self, callback: Box<dyn FnMut(AppLifecyclePhase)>) {
+        *self.app_lifecycle.borrow_mut() = Some(callback);
+    }
+
+    fn on_memory_warning(&self, callback: Box<dyn FnMut()>) {
+        *self.memory_warning.borrow_mut() = Some(callback);
+    }
+
     fn gestures(&self) -> Option<Rc<dyn PlatformGestures>> {
         Some(Rc::new(OhosGestures))
     }
@@ -267,8 +437,21 @@ impl Platform for OhosPlatform {
             .detach();
     }
 
-    fn restart(&self, _binary_path: Option<PathBuf>, _arguments: Vec<std::ffi::OsString>) {
-        // Not supported on OHOS
+    fn restart(&self, binary_path: Option<PathBuf>, arguments: Vec<std::ffi::OsString>) {
+        if binary_path.is_some() || !arguments.is_empty() {
+            warn!("OHOS restart resumes the current Ability without replacement arguments");
+        }
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        self.background_executor
+            .spawn(async move {
+                let result = async { app.process()?.restart().await }.await;
+                if let Err(error) = result {
+                    warn!("Failed to restart OpenHarmony application: {error}");
+                }
+            })
+            .detach();
     }
 
     fn activate(&self, _ignoring_other_apps: bool) {
@@ -276,11 +459,31 @@ impl Platform for OhosPlatform {
     }
 
     fn hide_cursor_until_mouse_moves(&self) {
-        // Not supported on OHOS
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        self.cursor_hidden_until_move.set(true);
+        let hidden = self.cursor_hidden_until_move.clone();
+        self.foreground_executor
+            .spawn(async move {
+                let result = async {
+                    let client = WindowClient::new(&app)?;
+                    client.set_cursor_visible(false).await?;
+                    if !hidden.get() {
+                        client.set_cursor_visible(true).await?;
+                    }
+                    Ok::<(), anyhow::Error>(())
+                }
+                .await;
+                if let Err(error) = result {
+                    warn!("Failed to hide OHOS cursor: {error}");
+                }
+            })
+            .detach();
     }
 
     fn is_cursor_visible(&self) -> bool {
-        true
+        !self.cursor_hidden_until_move.get()
     }
 
     fn hide(&self) {
@@ -311,12 +514,25 @@ impl Platform for OhosPlatform {
     }
 
     fn active_window(&self) -> Option<AnyWindowHandle> {
-        // OHOS typically has a single window
-        None
+        self.windows
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find_map(|window| {
+                let window = window.borrow();
+                window.is_active().then_some(window.handle)
+            })
     }
 
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
-        None
+        Some(
+            self.windows
+                .borrow()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .map(|window| window.borrow().handle)
+                .collect(),
+        )
     }
 
     fn is_screen_capture_supported(&self) -> bool {
@@ -337,18 +553,51 @@ impl Platform for OhosPlatform {
         handle: AnyWindowHandle,
         options: WindowParams,
     ) -> anyhow::Result<Box<dyn PlatformWindow>> {
-        if self.app.borrow().is_some() {
+        if let Some(app) = self.app.borrow().clone() {
+            let existing = self
+                .windows
+                .borrow()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .collect::<Vec<_>>();
+            let (window_id, fallback_atlas) = if let Some(primary) = existing.first() {
+                let atlas = primary
+                    .borrow()
+                    .atlas()
+                    .ok_or_else(|| anyhow::anyhow!("Primary OHOS window has no GPU atlas"))?;
+                let scale = app.scale() as f32;
+                let bounds = options.bounds;
+                let window_id = create_os_window(WindowCreateParams {
+                    name: format!("gpui-{}", uuid::Uuid::new_v4()),
+                    native_module_name: Some(app.module_name().ok_or_else(|| {
+                        anyhow::anyhow!("OHOS native module name is unavailable")
+                    })?),
+                    width: (bounds.size.width.as_f32() * scale).max(1.0) as i32,
+                    height: (bounds.size.height.as_f32() * scale).max(1.0) as i32,
+                    x: (bounds.origin.x.as_f32() * scale) as i32,
+                    y: (bounds.origin.y.as_f32() * scale) as i32,
+                    ..Default::default()
+                })?;
+                (window_id, Some(atlas))
+            } else {
+                (0, None)
+            };
             let window = OhosWindow::new(
                 self.app.clone(),
                 handle,
                 options,
                 self.gpu_context.clone(),
                 self.foreground_executor.clone(),
+                self.cursor_hidden_until_move.clone(),
+                window_id,
+                fallback_atlas,
             )?;
 
             // GPUI fetches sprite_atlas during window initialization and caches it.
             // Renderer must be ready at open_window time to avoid caching a broken atlas.
-            window.initialize_renderer()?;
+            if window_id == 0 {
+                window.initialize_renderer()?;
+            }
 
             let window = Rc::new(RefCell::new(window));
             self.windows.borrow_mut().push(Rc::downgrade(&window));
@@ -402,20 +651,66 @@ impl Platform for OhosPlatform {
 
     fn prompt_for_paths(
         &self,
-        _options: PathPromptOptions,
+        options: PathPromptOptions,
     ) -> oneshot::Receiver<Result<Option<Vec<PathBuf>>>> {
         let (tx, rx) = oneshot::channel();
-        tx.send(Ok(None)).ok();
+        let Some(app) = self.app.borrow().clone() else {
+            tx.send(Err(anyhow::anyhow!("OpenHarmonyApp not set"))).ok();
+            return rx;
+        };
+        self.background_executor
+            .spawn(async move {
+                let result = async {
+                    anyhow::ensure!(
+                        options.files != options.directories,
+                        "Select files or directories, not both"
+                    );
+                    let kind = if options.files {
+                        dialog_type::OPEN_FILE
+                    } else {
+                        dialog_type::OPEN_FOLDER
+                    };
+                    let response = app
+                        .show_file_dialog(FileDialogOptions::new(kind).allow_many(options.multiple))
+                        .await?;
+                    selected_paths(response.files, false)
+                }
+                .await;
+                tx.send(result).ok();
+            })
+            .detach();
         rx
     }
 
     fn prompt_for_new_path(
         &self,
-        _directory: &std::path::Path,
-        _suggested_name: Option<&str>,
+        directory: &std::path::Path,
+        suggested_name: Option<&str>,
     ) -> oneshot::Receiver<Result<Option<PathBuf>>> {
         let (tx, rx) = oneshot::channel();
-        tx.send(Ok(None)).ok();
+        let Some(app) = self.app.borrow().clone() else {
+            tx.send(Err(anyhow::anyhow!("OpenHarmonyApp not set"))).ok();
+            return rx;
+        };
+        let directory = directory.to_path_buf();
+        let suggested_name = suggested_name.map(str::to_owned);
+        self.background_executor
+            .spawn(async move {
+                let result = async {
+                    let location = directory
+                        .to_str()
+                        .ok_or_else(|| anyhow::anyhow!("Save directory is not UTF-8"))?;
+                    let uri = ohos_fileuri_binding::get_uri_from_path(location)?;
+                    let mut options =
+                        FileDialogOptions::new(dialog_type::SAVE_FILE).default_location(uri);
+                    options.suggested_name = suggested_name;
+                    let response = app.show_file_dialog(options).await?;
+                    Ok(selected_paths(response.files, true)?.and_then(|mut paths| paths.pop()))
+                }
+                .await;
+                tx.send(result).ok();
+            })
+            .detach();
         rx
     }
 
@@ -423,8 +718,27 @@ impl Platform for OhosPlatform {
         false
     }
 
-    fn reveal_path(&self, _path: &std::path::Path) {
-        // Not supported on OHOS
+    fn reveal_path(&self, path: &std::path::Path) {
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        let directory = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        let Some(directory) = directory.to_str() else {
+            warn!("Cannot reveal a non-UTF-8 path on OHOS");
+            return;
+        };
+        let directory = directory.to_owned();
+        self.background_executor
+            .spawn(async move {
+                if let Err(error) = app.reveal_in_dir(directory).await {
+                    warn!("Failed to reveal OHOS directory: {error}");
+                }
+            })
+            .detach();
     }
 
     fn open_with_system(&self, _path: &std::path::Path) {
@@ -485,8 +799,25 @@ impl Platform for OhosPlatform {
         ))
     }
 
-    fn set_cursor_style(&self, _style: CursorStyle) {
-        // Cursor style is managed by the system on OHOS
+    fn set_cursor_style(&self, style: CursorStyle) {
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        let style = ohos_cursor_style(style);
+        let window_id = self.cursor_window_id.get();
+        self.background_executor
+            .spawn(async move {
+                let result = async {
+                    WindowClient::new(&app)?
+                        .set_cursor_icon(window_id, style)
+                        .await
+                }
+                .await;
+                if let Err(error) = result {
+                    warn!("Failed to set OHOS cursor style: {error}");
+                }
+            })
+            .detach();
     }
 
     fn should_auto_hide_scrollbars(&self) -> bool {
@@ -494,12 +825,47 @@ impl Platform for OhosPlatform {
     }
 
     fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        // TODO: Implement clipboard support
-        None
+        self.clipboard_cache.borrow().clone()
     }
 
-    fn write_to_clipboard(&self, _item: ClipboardItem) {
-        // TODO: Implement clipboard support
+    fn read_from_clipboard_async(
+        &self,
+    ) -> Task<std::result::Result<Option<ClipboardItem>, ClipboardReadError>> {
+        let Some(app) = self.app.borrow().clone() else {
+            return Task::ready(Err(ClipboardReadError::Unavailable));
+        };
+        let cache = self.clipboard_cache.clone();
+        self.foreground_executor.spawn(async move {
+            let client = ClipboardClient::new(&app)
+                .map_err(|error| ClipboardReadError::Denied(error.to_string()))?;
+            let text = client
+                .read_text()
+                .await
+                .map_err(|error| ClipboardReadError::Denied(error.to_string()))?;
+            let item = text.map(ClipboardItem::new_string);
+            *cache.borrow_mut() = item.clone();
+            Ok(item)
+        })
+    }
+
+    fn write_to_clipboard(&self, item: ClipboardItem) {
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        let Some(text) = item.text() else {
+            warn!("OHOS clipboard bridge currently supports text entries only");
+            return;
+        };
+        let cache = self.clipboard_cache.clone();
+        self.foreground_executor
+            .spawn(async move {
+                let result = async { ClipboardClient::new(&app)?.write_text(text).await }.await;
+                match result {
+                    Ok(()) => *cache.borrow_mut() = Some(item),
+                    Err(error) => warn!("Failed to write OHOS clipboard: {error}"),
+                }
+            })
+            .detach();
     }
 
     fn write_credentials(&self, _url: &str, _username: &str, _password: &[u8]) -> Task<Result<()>> {

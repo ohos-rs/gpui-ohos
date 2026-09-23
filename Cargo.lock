@@ -1507,9 +1507,15 @@ dependencies = [
  "gpui",
  "itertools 0.14.0",
  "log",
+ "ohos-fileshare-binding",
+ "ohos-fileuri-binding",
  "openharmony-ability",
  "openharmony-ability-plugin-app-control",
+ "openharmony-ability-plugin-clipboard",
+ "openharmony-ability-plugin-files",
+ "openharmony-ability-plugin-process",
  "openharmony-ability-plugin-url",
+ "openharmony-ability-plugin-window",
  "parking_lot",
  "profiling",
  "raw-window-handle",
@@ -2599,9 +2605,9 @@ dependencies = [
 
 [[package]]
 name = "ohos-arkui-binding"
-version = "0.3.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63bbbdfac92061bf43732301b251529015137818c411fab3e438918d934937d5"
+checksum = "233d3535e593f71ae40b5ae4385119899dfd9a2f0e87d9a1ebfe8d1155795d8d"
 dependencies = [
  "bitflags 2.13.2",
  "napi-ohos",
@@ -2669,6 +2675,38 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "ohos-fileshare-binding"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0371259707995a4a2a3bbbf8efbac6daeb9c65768e5fdedb0b5c0daa8e34d11f"
+dependencies = [
+ "libc",
+ "ohos-fileshare-sys",
+]
+
+[[package]]
+name = "ohos-fileshare-sys"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb2afeb5e277acd9ae4523071662135ef7e019a4ce8434033376f81a71ff59fa"
+
+[[package]]
+name = "ohos-fileuri-binding"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39c712bf9dea520d9c9b61dc85b7754aa9b5f794e557491d75aeff0a9d3c21f1"
+dependencies = [
+ "libc",
+ "ohos-fileuri-sys",
+]
+
+[[package]]
+name = "ohos-fileuri-sys"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fac3513e95fb94a87fded0d881e1c2c3bc9e482943c00543a6af349f6fad687"
 
 [[package]]
 name = "ohos-image-native-binding"
@@ -2817,9 +2855,8 @@ dependencies = [
 
 [[package]]
 name = "ohos-xcomponent-binding"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edde557deb44b499ef7ee8653aa6f28bda5e6dddc58eb619c05d3a126374ddb1"
+version = "0.4.1"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=5087a63a0bc05d728940f26feb97f143fa48128a#5087a63a0bc05d728940f26feb97f143fa48128a"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -2850,7 +2887,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "openharmony-ability"
 version = "1.0.0-beta.2"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=e96d0bf526935de40480f5073517458ad905b243#e96d0bf526935de40480f5073517458ad905b243"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=5087a63a0bc05d728940f26feb97f143fa48128a#5087a63a0bc05d728940f26feb97f143fa48128a"
 dependencies = [
  "futures-channel",
  "log",
@@ -2874,7 +2911,37 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-app-control"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=e96d0bf526935de40480f5073517458ad905b243#e96d0bf526935de40480f5073517458ad905b243"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=5087a63a0bc05d728940f26feb97f143fa48128a#5087a63a0bc05d728940f26feb97f143fa48128a"
+dependencies = [
+ "napi-derive-ohos",
+ "napi-ohos",
+ "openharmony-ability",
+]
+
+[[package]]
+name = "openharmony-ability-plugin-clipboard"
+version = "1.0.0-beta.0"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=5087a63a0bc05d728940f26feb97f143fa48128a#5087a63a0bc05d728940f26feb97f143fa48128a"
+dependencies = [
+ "napi-derive-ohos",
+ "napi-ohos",
+ "openharmony-ability",
+]
+
+[[package]]
+name = "openharmony-ability-plugin-files"
+version = "1.0.0-beta.1"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=5087a63a0bc05d728940f26feb97f143fa48128a#5087a63a0bc05d728940f26feb97f143fa48128a"
+dependencies = [
+ "napi-derive-ohos",
+ "napi-ohos",
+ "openharmony-ability",
+]
+
+[[package]]
+name = "openharmony-ability-plugin-process"
+version = "1.0.0-beta.0"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=5087a63a0bc05d728940f26feb97f143fa48128a#5087a63a0bc05d728940f26feb97f143fa48128a"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -2884,7 +2951,17 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-url"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=e96d0bf526935de40480f5073517458ad905b243#e96d0bf526935de40480f5073517458ad905b243"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=5087a63a0bc05d728940f26feb97f143fa48128a#5087a63a0bc05d728940f26feb97f143fa48128a"
+dependencies = [
+ "napi-derive-ohos",
+ "napi-ohos",
+ "openharmony-ability",
+]
+
+[[package]]
+name = "openharmony-ability-plugin-window"
+version = "1.0.0-beta.1"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=5087a63a0bc05d728940f26feb97f143fa48128a#5087a63a0bc05d728940f26feb97f143fa48128a"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
