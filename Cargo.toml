@@ -17,9 +17,9 @@ futures = "0.3.34"
 gpui = { git = "https://github.com/ohos-rs/zed", rev = "59e51d0ff624b9c1de01236bc77bc6caf9efce42", default-features = false }
 itertools = "0.14.0"
 log = "0.4"
-openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "ea5d815025d3cf349176536d22da2bb1a5880af6" }
-openharmony-ability-plugin-app-control = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "ea5d815025d3cf349176536d22da2bb1a5880af6" }
-openharmony-ability-plugin-url = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "ea5d815025d3cf349176536d22da2bb1a5880af6" }
+openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "e96d0bf526935de40480f5073517458ad905b243" }
+openharmony-ability-plugin-app-control = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "e96d0bf526935de40480f5073517458ad905b243" }
+openharmony-ability-plugin-url = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "e96d0bf526935de40480f5073517458ad905b243" }
 parking_lot = "0.12.1"
 profiling = "1"
 raw-window-handle = "0.6"
