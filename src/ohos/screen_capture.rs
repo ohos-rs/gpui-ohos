@@ -236,19 +236,6 @@ impl OhosScreenCaptureStream {
             metadata,
             started: false,
         };
-        let user_data = callbacks.cast::<c_void>();
-        check(
-            unsafe { OH_AVScreenCapture_SetDataCallback(capture, on_buffer, user_data) },
-            "register video callback",
-        )?;
-        check(
-            unsafe { OH_AVScreenCapture_SetStateCallback(capture, on_state, user_data) },
-            "register state callback",
-        )?;
-        check(
-            unsafe { OH_AVScreenCapture_SetErrorCallback(capture, on_error, user_data) },
-            "register error callback",
-        )?;
         let resolution = stream.metadata.resolution;
         let config = ScreenCaptureConfig {
             capture_mode: 0, // OH_CAPTURE_HOME_SCREEN
@@ -293,6 +280,19 @@ impl OhosScreenCaptureStream {
         check(
             unsafe { OH_AVScreenCapture_Init(capture, config) },
             "initialize capture",
+        )?;
+        let user_data = callbacks.cast::<c_void>();
+        check(
+            unsafe { OH_AVScreenCapture_SetDataCallback(capture, on_buffer, user_data) },
+            "register video callback",
+        )?;
+        check(
+            unsafe { OH_AVScreenCapture_SetStateCallback(capture, on_state, user_data) },
+            "register state callback",
+        )?;
+        check(
+            unsafe { OH_AVScreenCapture_SetErrorCallback(capture, on_error, user_data) },
+            "register error callback",
         )?;
         check(
             unsafe { OH_AVScreenCapture_StartScreenCapture(capture) },
