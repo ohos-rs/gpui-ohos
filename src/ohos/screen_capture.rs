@@ -3,7 +3,10 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     ptr,
     rc::Rc,
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use anyhow::{Result, bail, ensure};
@@ -13,7 +16,9 @@ use gpui::{
     SourceMetadata, size,
 };
 use image::RgbaImage;
-use log::{error, warn};
+use log::{error, info, warn};
+
+static RECEIVED_VIDEO_BUFFERS: AtomicUsize = AtomicUsize::new(0);
 
 const VIDEO_BUFFER: i32 = 0;
 const RGBA_8888: i32 = 12;
@@ -333,9 +338,7 @@ unsafe extern "C" fn on_state(
     state: i32,
     _user_data: *mut c_void,
 ) {
-    if state != 0 {
-        warn!("OHOS screen capture changed state: {state}");
-    }
+    info!("OHOS screen capture changed state: {state}");
 }
 
 unsafe extern "C" fn on_error(
@@ -356,6 +359,10 @@ unsafe extern "C" fn on_buffer(
     if buffer_type != VIDEO_BUFFER || buffer.is_null() || user_data.is_null() {
         return;
     }
+    let count = RECEIVED_VIDEO_BUFFERS.fetch_add(1, Ordering::Relaxed) + 1;
+    if count <= 3 {
+        info!("OHOS screen capture received video buffer {count}");
+    }
     let result = catch_unwind(AssertUnwindSafe(|| unsafe {
         copy_frame(buffer, &*(user_data as *const CaptureCallbacks))
     }));
@@ -371,6 +378,12 @@ unsafe fn copy_frame(buffer: *mut AvBuffer, callbacks: &CaptureCallbacks) {
     }
     let mut config = NativeBufferConfig::default();
     unsafe { OH_NativeBuffer_GetConfig(native, &mut config) };
+    if RECEIVED_VIDEO_BUFFERS.load(Ordering::Relaxed) <= 3 {
+        info!(
+            "OHOS capture buffer: {}x{}, stride {}, format {}",
+            config.width, config.height, config.stride, config.format
+        );
+    }
     let Ok(width) = usize::try_from(config.width) else {
         return;
     };
