@@ -4,12 +4,14 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Instant,
 };
 
+use accesskit_ohos::Adapter as OhosA11yAdapter;
 use anyhow::Result;
 use futures::channel::oneshot;
+use ohos_accessibility_binding::Provider;
 use openharmony_ability::{
     ArkUiInputEvent, AvoidAreaType, Event, ImeEvent, InputEvent, OpenHarmonyApp, PointerInputData,
     XComponentInputEvent,
@@ -29,14 +31,14 @@ use super::wgpu_atlas::WgpuAtlas;
 use super::wgpu_context::WgpuContext;
 use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
 use crate::{
-    AnyWindowHandle, Bounds, Capslock, DevicePixels, Edges, ForegroundExecutor, GestureTuning,
-    GpuSpecs, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    A11yCallbacks, AnyWindowHandle, Bounds, Capslock, DevicePixels, Edges, ForegroundExecutor,
+    GestureTuning, GpuSpecs, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     NavigationDirection, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
     PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
     ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, TextInputStateChange, TouchEvent,
     TouchId, TouchPhase, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowControlArea, WindowControls, WindowDecorations, WindowInsets, WindowParams,
-    WindowVisibility, point, px, size,
+    WindowVisibility, accesskit, point, px, size,
 };
 
 pub(crate) struct OhosWindow {
@@ -67,6 +69,8 @@ pub(crate) struct OhosWindow {
     mouse_click: RefCell<Option<MouseClickState>>,
     back_enabled: Cell<bool>,
     back_handler: Rc<RefCell<Option<Box<dyn FnMut()>>>>,
+    a11y_callbacks: RefCell<Option<Arc<Mutex<A11yCallbacks>>>>,
+    a11y_adapter: RefCell<Option<OhosA11yAdapter<'static>>>,
     key_state: RefCell<OhosKeyState>,
     active_touches: RefCell<HashMap<i32, TouchId>>,
     touch_tap_candidates: RefCell<HashMap<i32, TouchTapCandidate>>,
@@ -80,6 +84,7 @@ pub(crate) struct OhosWindowHandle {
 
 impl Drop for OhosWindow {
     fn drop(&mut self) {
+        self.release_accessibility();
         if self.window_id == 0 {
             return;
         }
@@ -145,7 +150,95 @@ struct MouseClickState {
     count: usize,
 }
 
+struct OhosA11yActivation(Arc<Mutex<A11yCallbacks>>);
+
+impl accesskit::ActivationHandler for OhosA11yActivation {
+    fn request_initial_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|callbacks| (callbacks.activation)())
+    }
+}
+
+struct OhosA11yAction(Arc<Mutex<A11yCallbacks>>);
+
+impl accesskit::ActionHandler for OhosA11yAction {
+    fn do_action(&mut self, request: accesskit::ActionRequest) {
+        if let Ok(callbacks) = self.0.lock() {
+            (callbacks.action)(request);
+        }
+    }
+}
+
 impl OhosWindow {
+    fn initialize_accessibility(&self) {
+        if self.a11y_adapter.borrow().is_some() {
+            return;
+        }
+        let Some(callbacks) = self.a11y_callbacks.borrow().clone() else {
+            return;
+        };
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        let Some(provider_info) = app.with_xcomponent_for(self.window_id, |component| {
+            let native = component.native_xcomponent();
+            let provider = native
+                .accessibility_provider()
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let id = native
+                .id()
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            Ok::<_, anyhow::Error>((provider.as_raw() as usize, id))
+        }) else {
+            return;
+        };
+        let (provider_raw, instance_id) = match provider_info {
+            Ok(info) => info,
+            Err(error) => {
+                warn!("Failed to find OHOS accessibility provider: {error}");
+                return;
+            }
+        };
+        // The adapter is released on SurfaceDestroy, before the ability drops
+        // the render XComponent that owns this provider.
+        let provider: Provider<'static> =
+            match unsafe { Provider::from_raw(provider_raw as *mut _) } {
+                Ok(provider) => provider,
+                Err(error) => {
+                    warn!("Failed to retain OHOS accessibility provider: {error}");
+                    return;
+                }
+            };
+        match OhosA11yAdapter::new_with_instance(
+            provider,
+            &instance_id,
+            OhosA11yActivation(callbacks.clone()),
+            OhosA11yAction(callbacks),
+        ) {
+            Ok(adapter) => {
+                if let Err(error) = adapter.set_host_focus_state(self.active.get()) {
+                    warn!("Failed to set OHOS accessibility focus: {error}");
+                }
+                *self.a11y_adapter.borrow_mut() = Some(adapter);
+            }
+            Err(error) => warn!("Failed to register OHOS accessibility adapter: {error}"),
+        }
+    }
+
+    fn release_accessibility(&self) {
+        let adapter = self.a11y_adapter.borrow_mut().take();
+        if adapter.is_some() {
+            drop(adapter);
+            if let Some(callbacks) = self.a11y_callbacks.borrow().as_ref()
+                && let Ok(callbacks) = callbacks.lock()
+            {
+                (callbacks.deactivation)();
+            }
+        }
+    }
+
     pub(crate) fn new(
         app: Rc<RefCell<Option<OpenHarmonyApp>>>,
         handle: AnyWindowHandle,
@@ -213,6 +306,8 @@ impl OhosWindow {
             mouse_click: RefCell::new(None),
             back_enabled: Cell::new(false),
             back_handler: Rc::new(RefCell::new(None)),
+            a11y_callbacks: RefCell::new(None),
+            a11y_adapter: RefCell::new(None),
             key_state: RefCell::new(OhosKeyState::default()),
             active_touches: RefCell::new(HashMap::new()),
             touch_tap_candidates: RefCell::new(HashMap::new()),
@@ -877,6 +972,7 @@ impl OhosWindow {
         match event {
             Event::SurfaceCreate => {
                 debug!("OhosWindow: SurfaceCreate event received - initializing renderer");
+                self.initialize_accessibility();
                 // Initialize renderer when SurfaceCreate event is received
                 // Note: on_finish_launching is handled at the platform level (OhosPlatform::handle_ohos_event)
                 // before windows are created.
@@ -897,6 +993,7 @@ impl OhosWindow {
                 self.refresh_insets();
             }
             Event::SurfaceDestroy => {
+                self.release_accessibility();
                 self.renderer.borrow_mut().take();
                 self.set_hovered(false);
             }
@@ -1014,6 +1111,11 @@ impl OhosWindow {
             }
             Event::WindowFocusChanged { window_id, focused } => {
                 let next = *focused && *window_id == self.window_id;
+                if let Some(adapter) = self.a11y_adapter.borrow().as_ref()
+                    && let Err(error) = adapter.set_host_focus_state(next)
+                {
+                    warn!("Failed to update OHOS accessibility focus: {error}");
+                }
                 if self.active.replace(next) != next {
                     let mut callback = self.callbacks.borrow_mut().active_status_change.take();
                     if let Some(ref mut cb) = callback {
@@ -1453,6 +1555,14 @@ impl PlatformWindow for OhosWindowHandle {
         self.with_window(|window| window.set_back_enabled(enabled))
     }
 
+    fn a11y_init(&self, callbacks: A11yCallbacks) {
+        self.with_window(|window| window.a11y_init(callbacks))
+    }
+
+    fn a11y_tree_update(&self, update: accesskit::TreeUpdate) {
+        self.with_window(|window| window.a11y_tree_update(update))
+    }
+
     fn visibility(&self) -> WindowVisibility {
         self.with_window(|window| window.visibility())
     }
@@ -1740,6 +1850,21 @@ impl PlatformWindow for OhosWindow {
 
     fn set_back_enabled(&self, enabled: bool) {
         self.back_enabled.set(enabled);
+    }
+
+    fn a11y_init(&self, callbacks: A11yCallbacks) {
+        self.release_accessibility();
+        *self.a11y_callbacks.borrow_mut() = Some(Arc::new(Mutex::new(callbacks)));
+        self.initialize_accessibility();
+    }
+
+    fn a11y_tree_update(&self, update: accesskit::TreeUpdate) {
+        self.initialize_accessibility();
+        if let Some(adapter) = self.a11y_adapter.borrow().as_ref()
+            && let Err(error) = adapter.update_if_active(|| update)
+        {
+            warn!("Failed to update OHOS accessibility tree: {error}");
+        }
     }
 
     fn on_visibility_change(&self, callback: Box<dyn FnMut(WindowVisibility)>) {

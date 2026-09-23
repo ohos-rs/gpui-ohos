@@ -13,6 +13,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "accesskit_consumer"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53cf47daed85312e763fbf85ceca136e0d7abc68e0a7e12abe11f48172bc3b10"
+dependencies = [
+ "accesskit",
+ "hashbrown 0.16.1",
+]
+
+[[package]]
+name = "accesskit_ohos"
+version = "0.1.0"
+source = "git+https://github.com/richerfu/accesskit.git?rev=ea2d8c4#ea2d8c44b2a5d68a7f12fa26f942320f283181b3"
+dependencies = [
+ "accesskit",
+ "accesskit_consumer",
+ "ohos-accessibility-binding",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1547,6 +1567,7 @@ dependencies = [
 name = "gpui-ohos"
 version = "0.1.0"
 dependencies = [
+ "accesskit_ohos",
  "anyhow",
  "bytemuck",
  "cosmic-text",
@@ -1555,6 +1576,7 @@ dependencies = [
  "gpui",
  "itertools 0.14.0",
  "log",
+ "ohos-accessibility-binding",
  "ohos-fileshare-binding",
  "ohos-fileuri-binding",
  "openharmony-ability",
@@ -2645,6 +2667,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ohos-accessibility-binding"
+version = "0.1.0"
+source = "git+https://github.com/ohos-rs/ohos-native-bindings.git?rev=c05f75ebc489ad2a8c7f7b314aac38a27fb24836#c05f75ebc489ad2a8c7f7b314aac38a27fb24836"
+dependencies = [
+ "bitflags 2.13.2",
+ "ohos-accessibility-sys",
+ "ohos-arkui-input-sys",
+ "ohos-enum-derive 0.1.1 (git+https://github.com/ohos-rs/ohos-native-bindings.git?rev=c05f75ebc489ad2a8c7f7b314aac38a27fb24836)",
+]
+
+[[package]]
 name = "ohos-accessibility-sys"
 version = "0.0.4"
 source = "git+https://github.com/ohos-rs/ohos-native-bindings.git?rev=c05f75ebc489ad2a8c7f7b314aac38a27fb24836#c05f75ebc489ad2a8c7f7b314aac38a27fb24836"
@@ -2980,6 +3013,7 @@ dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
  "napi-sys-ohos",
+ "ohos-accessibility-binding",
  "ohos-arkui-input-binding",
  "ohos-enum-derive 0.1.1 (git+https://github.com/ohos-rs/ohos-native-bindings.git?rev=c05f75ebc489ad2a8c7f7b314aac38a27fb24836)",
  "ohos-xcomponent-sys",
@@ -3005,7 +3039,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "openharmony-ability"
 version = "1.0.0-beta.2"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=44ae00e#44ae00e519490010c2f1b35f9bb6af731486d67d"
 dependencies = [
  "futures-channel",
  "log",
@@ -3029,7 +3063,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-app-control"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=44ae00e#44ae00e519490010c2f1b35f9bb6af731486d67d"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -3039,7 +3073,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-clipboard"
 version = "1.0.0-beta.0"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=44ae00e#44ae00e519490010c2f1b35f9bb6af731486d67d"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -3049,7 +3083,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-credentials"
 version = "1.0.0-beta.0"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=44ae00e#44ae00e519490010c2f1b35f9bb6af731486d67d"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -3059,7 +3093,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-files"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=44ae00e#44ae00e519490010c2f1b35f9bb6af731486d67d"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -3069,7 +3103,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-process"
 version = "1.0.0-beta.0"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=44ae00e#44ae00e519490010c2f1b35f9bb6af731486d67d"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -3079,7 +3113,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-url"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=44ae00e#44ae00e519490010c2f1b35f9bb6af731486d67d"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -3089,7 +3123,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-window"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=44ae00e#44ae00e519490010c2f1b35f9bb6af731486d67d"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
