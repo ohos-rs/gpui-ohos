@@ -8,3 +8,4 @@ mod ohos;
 
 pub use gpui::*;
 pub use ohos::current_platform;
+pub use openharmony_ability::window::{CursorGrabError, set_cursor_grab};
