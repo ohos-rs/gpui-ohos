@@ -404,6 +404,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a"
 
 [[package]]
+name = "block-buffer"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "blocking"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -744,6 +753,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cpufeatures"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -793,6 +811,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
+name = "crypto-common"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
+dependencies = [
+ "generic-array",
+ "typenum",
+]
+
+[[package]]
 name = "ctor"
 version = "1.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -839,6 +867,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "digest"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
+dependencies = [
+ "block-buffer",
+ "crypto-common",
 ]
 
 [[package]]
@@ -1325,6 +1363,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "generic-array"
+version = "0.14.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
+dependencies = [
+ "typenum",
+ "version_check",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1512,6 +1560,7 @@ dependencies = [
  "openharmony-ability",
  "openharmony-ability-plugin-app-control",
  "openharmony-ability-plugin-clipboard",
+ "openharmony-ability-plugin-credentials",
  "openharmony-ability-plugin-files",
  "openharmony-ability-plugin-process",
  "openharmony-ability-plugin-url",
@@ -1520,6 +1569,7 @@ dependencies = [
  "profiling",
  "raw-window-handle",
  "rustc-hash 2.1.3",
+ "sha2",
  "smallvec",
  "smol",
  "uuid",
@@ -2955,7 +3005,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "openharmony-ability"
 version = "1.0.0-beta.2"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=9199e1915671078e332036836cc4abb4fcd70aa2#9199e1915671078e332036836cc4abb4fcd70aa2"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
 dependencies = [
  "futures-channel",
  "log",
@@ -2979,7 +3029,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-app-control"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=9199e1915671078e332036836cc4abb4fcd70aa2#9199e1915671078e332036836cc4abb4fcd70aa2"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -2989,7 +3039,17 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-clipboard"
 version = "1.0.0-beta.0"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=9199e1915671078e332036836cc4abb4fcd70aa2#9199e1915671078e332036836cc4abb4fcd70aa2"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
+dependencies = [
+ "napi-derive-ohos",
+ "napi-ohos",
+ "openharmony-ability",
+]
+
+[[package]]
+name = "openharmony-ability-plugin-credentials"
+version = "1.0.0-beta.0"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -2999,7 +3059,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-files"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=9199e1915671078e332036836cc4abb4fcd70aa2#9199e1915671078e332036836cc4abb4fcd70aa2"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -3009,7 +3069,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-process"
 version = "1.0.0-beta.0"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=9199e1915671078e332036836cc4abb4fcd70aa2#9199e1915671078e332036836cc4abb4fcd70aa2"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -3019,7 +3079,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-url"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=9199e1915671078e332036836cc4abb4fcd70aa2#9199e1915671078e332036836cc4abb4fcd70aa2"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -3029,7 +3089,7 @@ dependencies = [
 [[package]]
 name = "openharmony-ability-plugin-window"
 version = "1.0.0-beta.1"
-source = "git+https://github.com/richerfu/openharmony-ability.git?rev=9199e1915671078e332036836cc4abb4fcd70aa2#9199e1915671078e332036836cc4abb4fcd70aa2"
+source = "git+https://github.com/richerfu/openharmony-ability.git?rev=2a943a5#2a943a52fa251463e8dbc5cb65f990096bc5caf6"
 dependencies = [
  "napi-derive-ohos",
  "napi-ohos",
@@ -3907,6 +3967,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
+]
+
+[[package]]
 name = "sharded-slab"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4461,6 +4532,12 @@ name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
+
+[[package]]
+name = "typenum"
+version = "1.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "unicode-bidi"

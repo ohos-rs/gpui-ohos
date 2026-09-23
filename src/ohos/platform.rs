@@ -5,6 +5,7 @@ use std::{
     path::PathBuf,
     rc::{Rc, Weak},
     sync::Arc,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use anyhow::Result;
@@ -16,20 +17,22 @@ use openharmony_ability_plugin_app_control::{
     AppControlBridgePlugin, TerminateRequest, TerminateResponse,
 };
 use openharmony_ability_plugin_clipboard::{ClipboardBridgePlugin, ClipboardClient};
+use openharmony_ability_plugin_credentials::{CredentialsBridgePlugin, CredentialsClient};
 use openharmony_ability_plugin_files::{
     FileDialogOptions, FilesBridgePlugin, FilesExt as _, dialog_type,
 };
 use openharmony_ability_plugin_process::{ProcessBridgePlugin, ProcessExt as _};
 use openharmony_ability_plugin_url::{UrlBridgePlugin, UrlExt as _};
 use openharmony_ability_plugin_window::{WindowBridgePlugin, WindowClient};
+use sha2::{Digest, Sha256};
 
 use crate::{
-    Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, ClipboardItem,
-    ClipboardReadError, CursorStyle, ForegroundExecutor, GestureTuning, Keymap, Menu, MenuItem,
-    OwnedMenu, PathPromptOptions, Platform, PlatformDisplay, PlatformGestures,
-    PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow,
-    PriorityQueueReceiver, Result as GpuiResult, RunnableVariant, ScrollPhysics, Task,
-    ThermalState, WindowAppearance, WindowParams,
+    Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, ClipboardEntry,
+    ClipboardItem, ClipboardReadError, CursorStyle, ExternalPaths, ForegroundExecutor,
+    GestureTuning, Image, ImageFormat, Keymap, Menu, MenuItem, OwnedMenu, PathPromptOptions,
+    Platform, PlatformDisplay, PlatformGestures, PlatformKeyboardLayout, PlatformKeyboardMapper,
+    PlatformTextSystem, PlatformWindow, PriorityQueueReceiver, Result as GpuiResult,
+    RunnableVariant, ScrollPhysics, Task, ThermalState, WindowAppearance, WindowParams,
 };
 
 use super::{
@@ -53,6 +56,7 @@ pub(crate) struct OhosPlatform {
     clipboard_cache: Rc<RefCell<Option<ClipboardItem>>>,
     cursor_hidden_until_move: Rc<Cell<bool>>,
     cursor_window_id: Rc<Cell<i64>>,
+    idle_sleep_guards: Arc<AtomicUsize>,
 }
 
 pub(crate) fn appearance_for_color_mode(mode: ColorMode) -> WindowAppearance {
@@ -81,6 +85,10 @@ fn ohos_cursor_style(style: CursorStyle) -> i32 {
         CursorStyle::OperationNotAllowed => 15,
         CursorStyle::DragCopy => 14,
     }
+}
+
+fn credential_alias(url: &str) -> String {
+    format!("gpui-ohos:{:x}", Sha256::digest(url.as_bytes()))
 }
 
 impl OhosPlatform {
@@ -119,12 +127,41 @@ impl OhosPlatform {
             clipboard_cache: Rc::new(RefCell::new(None)),
             cursor_hidden_until_move: Rc::new(Cell::new(false)),
             cursor_window_id: Rc::new(Cell::new(0)),
+            idle_sleep_guards: Arc::new(AtomicUsize::new(0)),
         };
         platform.set_app(app);
         Ok(platform)
     }
 
     pub(crate) fn set_app(&self, app: OpenHarmonyApp) {
+        let windows = self.windows.clone();
+        app.on_back_press_intercept(move || {
+            let handler = windows
+                .borrow()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .find_map(|window| {
+                    let window = window.borrow();
+                    if window.is_active() {
+                        let (enabled, handler) = window.back_handler_state();
+                        enabled.then_some(handler)
+                    } else {
+                        None
+                    }
+                });
+            let Some(handler) = handler else {
+                return false;
+            };
+            let mut callback = handler.borrow_mut().take();
+            let handled = if let Some(ref mut callback) = callback {
+                callback();
+                true
+            } else {
+                false
+            };
+            *handler.borrow_mut() = callback;
+            handled
+        });
         if let Err(error) = app.set_touch_input_delivery(TouchInputDelivery::RawXComponent) {
             warn!("Failed to configure raw touch input for GPUI: {error}");
         }
@@ -136,6 +173,7 @@ impl OhosPlatform {
         }
         for result in [
             app.register_plugin(ClipboardBridgePlugin),
+            app.register_plugin(CredentialsBridgePlugin),
             app.register_plugin(FilesBridgePlugin),
             app.register_plugin(ProcessBridgePlugin),
             app.register_plugin(WindowBridgePlugin),
@@ -370,6 +408,7 @@ impl Clone for OhosPlatform {
             clipboard_cache: self.clipboard_cache.clone(),
             cursor_hidden_until_move: self.cursor_hidden_until_move.clone(),
             cursor_window_id: self.cursor_window_id.clone(),
+            idle_sleep_guards: self.idle_sleep_guards.clone(),
         }
     }
 }
@@ -753,8 +792,28 @@ impl Platform for OhosPlatform {
             .detach();
     }
 
-    fn open_with_system(&self, _path: &std::path::Path) {
-        // Not supported on OHOS
+    fn open_with_system(&self, path: &std::path::Path) {
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        let Some(path) = path.to_str() else {
+            warn!("Cannot open a non-UTF-8 path on OHOS");
+            return;
+        };
+        let uri = match ohos_fileuri_binding::get_uri_from_path(path) {
+            Ok(uri) => uri,
+            Err(error) => {
+                warn!("Cannot make OHOS file URI for {path}: {error}");
+                return;
+            }
+        };
+        self.background_executor
+            .spawn(async move {
+                if let Err(error) = app.open_file(uri).await {
+                    warn!("Failed to open OHOS file with system: {error}");
+                }
+            })
+            .detach();
     }
 
     fn on_quit(&self, _callback: Box<dyn FnMut() -> bool>) {
@@ -850,11 +909,35 @@ impl Platform for OhosPlatform {
         self.foreground_executor.spawn(async move {
             let client = ClipboardClient::new(&app)
                 .map_err(|error| ClipboardReadError::Denied(error.to_string()))?;
-            let text = client
-                .read_text()
+            let content = client
+                .read_content()
                 .await
                 .map_err(|error| ClipboardReadError::Denied(error.to_string()))?;
-            let item = text.map(ClipboardItem::new_string);
+            let mut entries = Vec::new();
+            if let Some(text) = content.text.filter(|text| !text.is_empty()) {
+                entries.push(ClipboardEntry::from(text));
+            }
+            if let Some(png) = content.png.filter(|png| !png.is_empty()) {
+                entries.push(ClipboardEntry::Image(Image::from_bytes(
+                    ImageFormat::Png,
+                    png,
+                )));
+            }
+            let paths = content
+                .uris
+                .iter()
+                .filter_map(|uri| match ohos_fileuri_binding::get_path_from_uri(uri) {
+                    Ok(path) => Some(PathBuf::from(path)),
+                    Err(error) => {
+                        warn!("Cannot map OHOS clipboard URI {uri}: {error}");
+                        None
+                    }
+                })
+                .collect();
+            if !content.uris.is_empty() {
+                entries.push(ClipboardEntry::ExternalPaths(ExternalPaths(paths)));
+            }
+            let item = (!entries.is_empty()).then_some(ClipboardItem { entries });
             *cache.borrow_mut() = item.clone();
             Ok(item)
         })
@@ -864,14 +947,57 @@ impl Platform for OhosPlatform {
         let Some(app) = self.app.borrow().clone() else {
             return;
         };
-        let Some(text) = item.text() else {
-            warn!("OHOS clipboard bridge currently supports text entries only");
+        enum Write {
+            Text(String),
+            Image(Vec<u8>),
+            Uris(Vec<String>),
+        }
+        let write = if let Some(ClipboardEntry::ExternalPaths(paths)) = item
+            .entries()
+            .iter()
+            .find(|entry| matches!(entry, ClipboardEntry::ExternalPaths(_)))
+        {
+            let uris = paths
+                .paths()
+                .iter()
+                .map(|path| {
+                    let path = path
+                        .to_str()
+                        .ok_or_else(|| anyhow::anyhow!("Clipboard path is not UTF-8"))?;
+                    ohos_fileuri_binding::get_uri_from_path(path).map_err(anyhow::Error::from)
+                })
+                .collect::<Result<Vec<_>>>();
+            match uris {
+                Ok(uris) => Write::Uris(uris),
+                Err(error) => {
+                    warn!("Cannot write OHOS clipboard paths: {error}");
+                    return;
+                }
+            }
+        } else if let Some(ClipboardEntry::Image(image)) = item
+            .entries()
+            .iter()
+            .find(|entry| matches!(entry, ClipboardEntry::Image(_)))
+        {
+            Write::Image(image.bytes.clone())
+        } else if let Some(text) = item.text() {
+            Write::Text(text)
+        } else {
+            warn!("OHOS clipboard item has no supported entries");
             return;
         };
         let cache = self.clipboard_cache.clone();
         self.foreground_executor
             .spawn(async move {
-                let result = async { ClipboardClient::new(&app)?.write_text(text).await }.await;
+                let result = async {
+                    let client = ClipboardClient::new(&app)?;
+                    match write {
+                        Write::Text(text) => client.write_text(text).await,
+                        Write::Image(bytes) => client.write_encoded_image(&bytes).await,
+                        Write::Uris(uris) => client.write_uris(uris).await,
+                    }
+                }
+                .await;
                 match result {
                     Ok(()) => *cache.borrow_mut() = Some(item),
                     Err(error) => warn!("Failed to write OHOS clipboard: {error}"),
@@ -880,20 +1006,39 @@ impl Platform for OhosPlatform {
             .detach();
     }
 
-    fn write_credentials(&self, _url: &str, _username: &str, _password: &[u8]) -> Task<Result<()>> {
-        Task::ready(Err(anyhow::anyhow!(
-            "Credential storage not supported on OHOS"
-        )))
+    fn write_credentials(&self, url: &str, username: &str, password: &[u8]) -> Task<Result<()>> {
+        let Some(app) = self.app.borrow().clone() else {
+            return Task::ready(Err(anyhow::anyhow!("OpenHarmonyApp not set")));
+        };
+        let alias = credential_alias(url);
+        let username = username.to_owned();
+        let password = password.to_vec();
+        self.background_executor.spawn(async move {
+            CredentialsClient::new(&app)?
+                .write(alias, username, password)
+                .await?;
+            Ok(())
+        })
     }
 
-    fn read_credentials(&self, _url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
-        Task::ready(Ok(None))
+    fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
+        let Some(app) = self.app.borrow().clone() else {
+            return Task::ready(Err(anyhow::anyhow!("OpenHarmonyApp not set")));
+        };
+        let alias = credential_alias(url);
+        self.background_executor
+            .spawn(async move { Ok(CredentialsClient::new(&app)?.read(alias).await?) })
     }
 
-    fn delete_credentials(&self, _url: &str) -> Task<Result<()>> {
-        Task::ready(Err(anyhow::anyhow!(
-            "Credential deletion not supported on OHOS"
-        )))
+    fn delete_credentials(&self, url: &str) -> Task<Result<()>> {
+        let Some(app) = self.app.borrow().clone() else {
+            return Task::ready(Err(anyhow::anyhow!("OpenHarmonyApp not set")));
+        };
+        let alias = credential_alias(url);
+        self.background_executor.spawn(async move {
+            CredentialsClient::new(&app)?.delete(alias).await?;
+            Ok(())
+        })
     }
 
     fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout> {
@@ -915,7 +1060,27 @@ impl Platform for OhosPlatform {
     fn on_thermal_state_change(&self, _callback: Box<dyn FnMut()>) {}
 
     fn prevent_idle_sleep(&self, _reason: &str) -> Task<Result<ActivityGuard>> {
-        Task::ready(Ok(ActivityGuard::noop()))
+        let Some(app) = self.app.borrow().clone() else {
+            return Task::ready(Err(anyhow::anyhow!("OpenHarmonyApp not set")));
+        };
+        let guards = self.idle_sleep_guards.clone();
+        let background = self.background_executor.clone();
+        self.background_executor.spawn(async move {
+            let client = WindowClient::new(&app)?;
+            client.set_keep_screen_on(0, true).await?;
+            guards.fetch_add(1, Ordering::AcqRel);
+            Ok(ActivityGuard::new(move || {
+                if guards.fetch_sub(1, Ordering::AcqRel) == 1 {
+                    background
+                        .spawn(async move {
+                            if let Err(error) = client.set_keep_screen_on(0, false).await {
+                                warn!("Failed to restore OHOS idle sleep: {error}");
+                            }
+                        })
+                        .detach();
+                }
+            }))
+        })
     }
 
     fn read_from_primary(&self) -> Option<ClipboardItem> {

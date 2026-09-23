@@ -17,18 +17,20 @@ futures = "0.3.34"
 gpui = { git = "https://github.com/ohos-rs/zed", rev = "59e51d0ff624b9c1de01236bc77bc6caf9efce42", default-features = false }
 itertools = "0.14.0"
 log = "0.4"
-openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "9199e1915671078e332036836cc4abb4fcd70aa2" }
-openharmony-ability-plugin-app-control = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "9199e1915671078e332036836cc4abb4fcd70aa2" }
-openharmony-ability-plugin-clipboard = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "9199e1915671078e332036836cc4abb4fcd70aa2" }
-openharmony-ability-plugin-files = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "9199e1915671078e332036836cc4abb4fcd70aa2" }
-openharmony-ability-plugin-process = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "9199e1915671078e332036836cc4abb4fcd70aa2" }
-openharmony-ability-plugin-url = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "9199e1915671078e332036836cc4abb4fcd70aa2" }
-openharmony-ability-plugin-window = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "9199e1915671078e332036836cc4abb4fcd70aa2" }
+openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "2a943a5" }
+openharmony-ability-plugin-app-control = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "2a943a5" }
+openharmony-ability-plugin-clipboard = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "2a943a5" }
+openharmony-ability-plugin-credentials = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "2a943a5" }
+openharmony-ability-plugin-files = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "2a943a5" }
+openharmony-ability-plugin-process = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "2a943a5" }
+openharmony-ability-plugin-url = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "2a943a5" }
+openharmony-ability-plugin-window = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "2a943a5" }
 parking_lot = "0.12.1"
 profiling = "1"
 raw-window-handle = "0.6"
 rustc-hash = "2"
 smallvec = { version = "1.6", features = ["union", "const_new"] }
+sha2 = "0.10"
 smol = "2.0"
 uuid = { version = "1.1.2", features = ["v4", "v5", "v7", "serde"] }
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "8b419de0906f37af69d728f1735132e427a3436f", default-features = false, features = ["parking_lot", "std", "wgsl"] }
@@ -64,6 +66,7 @@ log.workspace = true
 openharmony-ability.workspace = true
 openharmony-ability-plugin-app-control.workspace = true
 openharmony-ability-plugin-clipboard.workspace = true
+openharmony-ability-plugin-credentials.workspace = true
 openharmony-ability-plugin-files.workspace = true
 openharmony-ability-plugin-process.workspace = true
 openharmony-ability-plugin-url.workspace = true
@@ -73,6 +76,7 @@ profiling.workspace = true
 raw-window-handle.workspace = true
 rustc-hash.workspace = true
 smallvec.workspace = true
+sha2.workspace = true
 smol.workspace = true
 uuid.workspace = true
 wgpu.workspace = true

@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     rc::Rc,
     sync::Arc,
+    time::Instant,
 };
 
 use anyhow::Result;
@@ -49,6 +50,7 @@ pub(crate) struct OhosWindow {
     fullscreen: Rc<Cell<bool>>,
     background_appearance: Rc<Cell<WindowBackgroundAppearance>>,
     active: Cell<bool>,
+    hovered: Cell<bool>,
     visibility: Cell<WindowVisibility>,
     insets: RefCell<WindowInsets>,
     keyboard_overlap_device_px: Cell<i32>,
@@ -62,6 +64,9 @@ pub(crate) struct OhosWindow {
     keyboard_visible: Rc<Cell<bool>>,
     pointer_position: Cell<Option<Point<Pixels>>>,
     pressed_mouse_button: Cell<Option<MouseButton>>,
+    mouse_click: RefCell<Option<MouseClickState>>,
+    back_enabled: Cell<bool>,
+    back_handler: Rc<RefCell<Option<Box<dyn FnMut()>>>>,
     key_state: RefCell<OhosKeyState>,
     active_touches: RefCell<HashMap<i32, TouchId>>,
     touch_tap_candidates: RefCell<HashMap<i32, TouchTapCandidate>>,
@@ -133,6 +138,13 @@ struct TouchTapCandidate {
     started_in_text_input: bool,
 }
 
+struct MouseClickState {
+    button: MouseButton,
+    position: Point<Pixels>,
+    time: Instant,
+    count: usize,
+}
+
 impl OhosWindow {
     pub(crate) fn new(
         app: Rc<RefCell<Option<OpenHarmonyApp>>>,
@@ -171,6 +183,7 @@ impl OhosWindow {
             fullscreen: Rc::new(Cell::new(false)),
             background_appearance: Rc::new(Cell::new(WindowBackgroundAppearance::Opaque)),
             active: Cell::new(window_id == 0),
+            hovered: Cell::new(false),
             visibility: Cell::new(WindowVisibility::Visible),
             insets: RefCell::new(WindowInsets::default()),
             keyboard_overlap_device_px: Cell::new(0),
@@ -197,6 +210,9 @@ impl OhosWindow {
             keyboard_visible: Rc::new(Cell::new(false)),
             pointer_position: Cell::new(None),
             pressed_mouse_button: Cell::new(None),
+            mouse_click: RefCell::new(None),
+            back_enabled: Cell::new(false),
+            back_handler: Rc::new(RefCell::new(None)),
             key_state: RefCell::new(OhosKeyState::default()),
             active_touches: RefCell::new(HashMap::new()),
             touch_tap_candidates: RefCell::new(HashMap::new()),
@@ -669,6 +685,21 @@ impl OhosWindow {
         self.callbacks.borrow_mut().visibility_change = callback;
     }
 
+    pub(crate) fn back_handler_state(&self) -> (bool, Rc<RefCell<Option<Box<dyn FnMut()>>>>) {
+        (self.back_enabled.get(), self.back_handler.clone())
+    }
+
+    fn set_hovered(&self, hovered: bool) {
+        if self.hovered.replace(hovered) == hovered {
+            return;
+        }
+        let mut callback = self.callbacks.borrow_mut().hover_status_change.take();
+        if let Some(ref mut callback) = callback {
+            callback(hovered);
+        }
+        self.callbacks.borrow_mut().hover_status_change = callback;
+    }
+
     fn window_client(&self) -> Option<WindowClient> {
         let app = self.app.borrow().clone()?;
         match WindowClient::new(&app) {
@@ -867,6 +898,7 @@ impl OhosWindow {
             }
             Event::SurfaceDestroy => {
                 self.renderer.borrow_mut().take();
+                self.set_hovered(false);
             }
             Event::WindowResize {
                 window_id,
@@ -918,7 +950,29 @@ impl OhosWindow {
                 self.emit_resize_callback();
                 self.refresh_insets();
             }
-            Event::ContentRectChange(..) => {
+            Event::ContentRectChange(info) if info.window_id == self.window_id => {
+                let scale = self.scale_factor();
+                let content_rect = self
+                    .app
+                    .borrow()
+                    .as_ref()
+                    .map(|app| app.content_rect_for(self.window_id))
+                    .unwrap_or_default();
+                let next_origin = point(
+                    px((info.rect.left + content_rect.left) as f32 / scale),
+                    px((info.rect.top + content_rect.top) as f32 / scale),
+                );
+                let mut bounds = self.bounds.borrow_mut();
+                let moved = bounds.origin != next_origin;
+                bounds.origin = next_origin;
+                drop(bounds);
+                if moved {
+                    let mut callback = self.callbacks.borrow_mut().moved.take();
+                    if let Some(ref mut callback) = callback {
+                        callback();
+                    }
+                    self.callbacks.borrow_mut().moved = callback;
+                }
                 if self.refresh_keyboard_overlap_device_px() {
                     self.emit_resize_callback();
                 }
@@ -968,7 +1022,9 @@ impl OhosWindow {
                     self.callbacks.borrow_mut().active_status_change = callback;
                 }
                 if !next {
+                    self.set_hovered(false);
                     self.pressed_mouse_button.set(None);
+                    self.mouse_click.borrow_mut().take();
                     let modifiers_changed = self.key_state.borrow_mut().clear_pressed();
                     if let Some(event) = modifiers_changed {
                         self.dispatch_input(event);
@@ -1002,6 +1058,7 @@ impl OhosWindow {
             Event::WindowDestroy => {
                 self.update_visibility(WindowVisibility::Hidden);
                 self.active.set(false);
+                self.set_hovered(false);
                 if self.refresh_keyboard_overlap_device_px() {
                     self.emit_resize_callback();
                 }
@@ -1064,6 +1121,12 @@ impl OhosWindow {
                                 handler.replace_text_in_range(None, &data.text);
                                 handler.unmark_text();
                             }
+                            ImeEvent::PreviewTextEvent { text, start, end } => {
+                                let range = (start >= 0 && end >= start)
+                                    .then_some(start as usize..end as usize);
+                                handler.replace_and_mark_text_in_range(range, &text, None);
+                            }
+                            ImeEvent::FinishPreviewEvent => handler.unmark_text(),
                             ImeEvent::EnterEvent(_action) => {
                                 handler.replace_text_in_range(None, "\n");
                                 handler.unmark_text();
@@ -1110,12 +1173,31 @@ impl OhosWindow {
                         let Some(button) = event_button else {
                             return;
                         };
+                        let now = Instant::now();
+                        let tuning = GestureTuning::default();
+                        let mut click = self.mouse_click.borrow_mut();
+                        let click_count = click
+                            .as_ref()
+                            .filter(|last| {
+                                last.button == button
+                                    && now.duration_since(last.time) <= tuning.multi_tap_interval
+                                    && (position - last.position).magnitude()
+                                        <= f64::from(tuning.multi_tap_slop)
+                            })
+                            .map_or(1, |last| last.count.saturating_add(1));
+                        *click = Some(MouseClickState {
+                            button,
+                            position,
+                            time: now,
+                            count: click_count,
+                        });
+                        drop(click);
                         self.pressed_mouse_button.set(Some(button));
                         self.dispatch_input(PlatformInput::MouseDown(MouseDownEvent {
                             button,
                             position,
                             modifiers: self.key_state.borrow().modifiers(),
-                            click_count: 1,
+                            click_count,
                             first_mouse: false,
                         }));
                     }
@@ -1129,7 +1211,12 @@ impl OhosWindow {
                             button,
                             position,
                             modifiers: self.key_state.borrow().modifiers(),
-                            click_count: 1,
+                            click_count: self
+                                .mouse_click
+                                .borrow()
+                                .as_ref()
+                                .filter(|click| click.button == button)
+                                .map_or(1, |click| click.count),
                         }));
                     }
                     MouseAction::Move => {
@@ -1142,6 +1229,9 @@ impl OhosWindow {
                     }
                     MouseAction::None => {}
                 }
+            }
+            InputEvent::XComponent(XComponentInputEvent::Hover(hovered)) => {
+                self.set_hovered(*hovered);
             }
             InputEvent::ArkUi(ArkUiInputEvent::Axis(axis_event)) => {
                 let position = self.pointer_position_from_arkui(axis_event.pointer);
@@ -1355,6 +1445,14 @@ impl PlatformWindow for OhosWindowHandle {
         self.with_window(|window| window.on_hover_status_change(callback))
     }
 
+    fn set_back_handler(&self, callback: Box<dyn FnMut()>) {
+        self.with_window(|window| window.set_back_handler(callback))
+    }
+
+    fn set_back_enabled(&self, enabled: bool) {
+        self.with_window(|window| window.set_back_enabled(enabled))
+    }
+
     fn visibility(&self) -> WindowVisibility {
         self.with_window(|window| window.visibility())
     }
@@ -1512,7 +1610,7 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn is_hovered(&self) -> bool {
-        false
+        self.hovered.get()
     }
 
     fn background_appearance(&self) -> WindowBackgroundAppearance {
@@ -1634,6 +1732,14 @@ impl PlatformWindow for OhosWindow {
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>) {
         self.callbacks.borrow_mut().hover_status_change = Some(callback);
+    }
+
+    fn set_back_handler(&self, callback: Box<dyn FnMut()>) {
+        *self.back_handler.borrow_mut() = Some(callback);
+    }
+
+    fn set_back_enabled(&self, enabled: bool) {
+        self.back_enabled.set(enabled);
     }
 
     fn on_visibility_change(&self, callback: Box<dyn FnMut(WindowVisibility)>) {
