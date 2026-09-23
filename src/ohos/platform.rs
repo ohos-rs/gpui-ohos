@@ -262,6 +262,14 @@ impl OhosPlatform {
                 Event::ContentRectChange(rect) if id == rect.window_id => {
                     window.borrow().handle_event(event)
                 }
+                Event::AvoidAreaChange(info) if id == info.window_id => {
+                    window.borrow().handle_event(event)
+                }
+                Event::WindowFocusChanged { window_id, focused }
+                    if *focused || id == *window_id =>
+                {
+                    window.borrow().handle_event(event)
+                }
                 Event::SurfaceCreate
                 | Event::SurfaceDestroy
                 | Event::WindowRedraw(_)
@@ -281,11 +289,15 @@ impl OhosPlatform {
                 | Event::SubWindowInput { .. }
                 | Event::WindowResize { .. }
                 | Event::ContentRectChange(_)
+                | Event::AvoidAreaChange(_)
+                | Event::WindowFocusChanged { .. }
                 | Event::SurfaceCreate
                 | Event::SurfaceDestroy
                 | Event::WindowRedraw(_)
                 | Event::Input(_)
                 | Event::WindowDestroy => {}
+                Event::GainedFocus | Event::LostFocus => {}
+                Event::KeyboardEvent(_) if id != 0 => {}
                 _ => window.borrow().handle_event(event),
             }
         }

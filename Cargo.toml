@@ -17,13 +17,13 @@ futures = "0.3.34"
 gpui = { git = "https://github.com/ohos-rs/zed", rev = "59e51d0ff624b9c1de01236bc77bc6caf9efce42", default-features = false }
 itertools = "0.14.0"
 log = "0.4"
-openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "f79612979165fe9ebf14f90db075540befcc67eb" }
-openharmony-ability-plugin-app-control = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "f79612979165fe9ebf14f90db075540befcc67eb" }
-openharmony-ability-plugin-clipboard = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "f79612979165fe9ebf14f90db075540befcc67eb" }
-openharmony-ability-plugin-files = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "f79612979165fe9ebf14f90db075540befcc67eb" }
-openharmony-ability-plugin-process = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "f79612979165fe9ebf14f90db075540befcc67eb" }
-openharmony-ability-plugin-url = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "f79612979165fe9ebf14f90db075540befcc67eb" }
-openharmony-ability-plugin-window = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "f79612979165fe9ebf14f90db075540befcc67eb" }
+openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "22ea7bff2c89935c3f3ecc0269e59e72ba550f05" }
+openharmony-ability-plugin-app-control = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "22ea7bff2c89935c3f3ecc0269e59e72ba550f05" }
+openharmony-ability-plugin-clipboard = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "22ea7bff2c89935c3f3ecc0269e59e72ba550f05" }
+openharmony-ability-plugin-files = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "22ea7bff2c89935c3f3ecc0269e59e72ba550f05" }
+openharmony-ability-plugin-process = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "22ea7bff2c89935c3f3ecc0269e59e72ba550f05" }
+openharmony-ability-plugin-url = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "22ea7bff2c89935c3f3ecc0269e59e72ba550f05" }
+openharmony-ability-plugin-window = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "22ea7bff2c89935c3f3ecc0269e59e72ba550f05" }
 parking_lot = "0.12.1"
 profiling = "1"
 raw-window-handle = "0.6"

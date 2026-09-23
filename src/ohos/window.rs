@@ -22,6 +22,7 @@ use openharmony_ability_plugin_window::WindowClient;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::display::OhosDisplay;
+use super::keyboard::OhosKeyState;
 use super::platform::appearance_for_color_mode;
 use super::wgpu_atlas::WgpuAtlas;
 use super::wgpu_context::WgpuContext;
@@ -61,6 +62,7 @@ pub(crate) struct OhosWindow {
     keyboard_visible: Rc<Cell<bool>>,
     pointer_position: Cell<Option<Point<Pixels>>>,
     pressed_mouse_button: Cell<Option<MouseButton>>,
+    key_state: RefCell<OhosKeyState>,
     active_touches: RefCell<HashMap<i32, TouchId>>,
     touch_tap_candidates: RefCell<HashMap<i32, TouchTapCandidate>>,
     next_touch_id: Cell<u64>,
@@ -168,7 +170,7 @@ impl OhosWindow {
             maximized: Rc::new(Cell::new(false)),
             fullscreen: Rc::new(Cell::new(false)),
             background_appearance: Rc::new(Cell::new(WindowBackgroundAppearance::Opaque)),
-            active: Cell::new(true),
+            active: Cell::new(window_id == 0),
             visibility: Cell::new(WindowVisibility::Visible),
             insets: RefCell::new(WindowInsets::default()),
             keyboard_overlap_device_px: Cell::new(0),
@@ -195,6 +197,7 @@ impl OhosWindow {
             keyboard_visible: Rc::new(Cell::new(false)),
             pointer_position: Cell::new(None),
             pressed_mouse_button: Cell::new(None),
+            key_state: RefCell::new(OhosKeyState::default()),
             active_touches: RefCell::new(HashMap::new()),
             touch_tap_candidates: RefCell::new(HashMap::new()),
             next_touch_id: Cell::new(0),
@@ -385,7 +388,7 @@ impl OhosWindow {
             PlatformInput::ScrollWheel(ScrollWheelEvent {
                 position,
                 delta: ScrollDelta::Pixels(delta),
-                modifiers: Modifiers::default(),
+                modifiers: self.key_state.borrow().modifiers(),
                 touch_phase,
             }),
         )
@@ -444,13 +447,10 @@ impl OhosWindow {
     }
 
     fn keyboard_overlap_from_avoid_area_device_px(&self) -> Option<i32> {
-        if self.window_id != 0 {
-            return Some(0);
-        }
         let app_ref = self.app.borrow();
         let app = app_ref.as_ref()?;
 
-        let content_rect = app.content_rect();
+        let content_rect = app.content_rect_for(self.window_id);
         if content_rect.height <= 0 {
             return Some(0);
         }
@@ -462,14 +462,15 @@ impl OhosWindow {
         if layout_height <= 0 {
             return Some(0);
         }
-        let window_rect = app.window_rect_for(0);
+        let window_rect = app.window_rect_for(self.window_id);
         let window_top = window_rect.top;
         let window_bottom = window_rect.top.saturating_add(window_rect.height.max(0));
 
-        let keyboard_area = app.avoid_area(AvoidAreaType::Keyboard);
-        let system_area = app.avoid_area(AvoidAreaType::System);
-        let system_gesture_area = app.avoid_area(AvoidAreaType::SystemGesture);
-        let navigation_indicator_area = app.avoid_area(AvoidAreaType::NavigationIndicator);
+        let keyboard_area = app.avoid_area_for(self.window_id, AvoidAreaType::Keyboard);
+        let system_area = app.avoid_area_for(self.window_id, AvoidAreaType::System);
+        let system_gesture_area = app.avoid_area_for(self.window_id, AvoidAreaType::SystemGesture);
+        let navigation_indicator_area =
+            app.avoid_area_for(self.window_id, AvoidAreaType::NavigationIndicator);
 
         // OHOS avoid-area bottomRect coordinates are in window/screen space.
         // XComponent's content_rect can be reported in safe-content coordinates on some devices.
@@ -603,14 +604,11 @@ impl OhosWindow {
     }
 
     fn current_safe_area_insets(&self) -> WindowInsets {
-        if self.window_id != 0 {
-            return WindowInsets::default();
-        }
         let Some(app) = self.app.borrow().clone() else {
             return WindowInsets::default();
         };
-        let content = app.content_rect();
-        let window = app.window_rect_for(0);
+        let content = app.content_rect_for(self.window_id);
+        let window = app.window_rect_for(self.window_id);
         let mut top = 0_i32;
         let mut right = 0_i32;
         let mut bottom = 0_i32;
@@ -620,7 +618,7 @@ impl OhosWindow {
             AvoidAreaType::Cutout,
             AvoidAreaType::NavigationIndicator,
         ] {
-            if let Some(area) = app.avoid_area(kind)
+            if let Some(area) = app.avoid_area_for(self.window_id, kind)
                 && area.visible
             {
                 top = top.max(area.top_rect.height.max(0));
@@ -940,24 +938,25 @@ impl OhosWindow {
             Event::Input(input_event) => {
                 self.handle_input_event(input_event);
             }
-            Event::GainedFocus => {
-                self.active.set(true);
-                let mut callback = self.callbacks.borrow_mut().active_status_change.take();
-                if let Some(ref mut cb) = callback {
-                    cb(true);
+            Event::WindowFocusChanged { window_id, focused } => {
+                let next = *focused && *window_id == self.window_id;
+                if self.active.replace(next) != next {
+                    let mut callback = self.callbacks.borrow_mut().active_status_change.take();
+                    if let Some(ref mut cb) = callback {
+                        cb(next);
+                    }
+                    self.callbacks.borrow_mut().active_status_change = callback;
                 }
-                self.callbacks.borrow_mut().active_status_change = callback;
-            }
-            Event::LostFocus => {
-                self.active.set(false);
-                let mut callback = self.callbacks.borrow_mut().active_status_change.take();
-                if let Some(ref mut cb) = callback {
-                    cb(false);
-                }
-                self.callbacks.borrow_mut().active_status_change = callback;
-                self.hide_keyboard_if_needed();
-                if self.refresh_keyboard_overlap_device_px() {
-                    self.emit_resize_callback();
+                if !next {
+                    self.pressed_mouse_button.set(None);
+                    let modifiers_changed = self.key_state.borrow_mut().clear_pressed();
+                    if let Some(event) = modifiers_changed {
+                        self.dispatch_input(event);
+                    }
+                    self.hide_keyboard_if_needed();
+                    if self.refresh_keyboard_overlap_device_px() {
+                        self.emit_resize_callback();
+                    }
                 }
             }
             Event::ConfigChanged(configuration) => {
@@ -1095,7 +1094,7 @@ impl OhosWindow {
                         self.dispatch_input(PlatformInput::MouseDown(MouseDownEvent {
                             button,
                             position,
-                            modifiers: Modifiers::default(),
+                            modifiers: self.key_state.borrow().modifiers(),
                             click_count: 1,
                             first_mouse: false,
                         }));
@@ -1109,7 +1108,7 @@ impl OhosWindow {
                         self.dispatch_input(PlatformInput::MouseUp(MouseUpEvent {
                             button,
                             position,
-                            modifiers: Modifiers::default(),
+                            modifiers: self.key_state.borrow().modifiers(),
                             click_count: 1,
                         }));
                     }
@@ -1118,7 +1117,7 @@ impl OhosWindow {
                         self.dispatch_input(PlatformInput::MouseMove(MouseMoveEvent {
                             position,
                             pressed_button: self.pressed_mouse_button.get().or(event_button),
-                            modifiers: Modifiers::default(),
+                            modifiers: self.key_state.borrow().modifiers(),
                         }));
                     }
                     MouseAction::None => {}
@@ -1149,7 +1148,12 @@ impl OhosWindow {
             InputEvent::XComponent(XComponentInputEvent::Touch(touch_event)) => {
                 self.dispatch_raw_touch_event(touch_event);
             }
-            InputEvent::XComponent(XComponentInputEvent::Key(_)) => {}
+            InputEvent::XComponent(XComponentInputEvent::Key(key_event)) => {
+                let inputs = self.key_state.borrow_mut().handle(key_event);
+                for input in inputs {
+                    self.dispatch_input(input);
+                }
+            }
         }
     }
 
@@ -1414,8 +1418,23 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn resize(&mut self, size: Size<Pixels>) {
-        let origin = self.bounds.borrow().origin;
-        *self.bounds.borrow_mut() = Bounds::new(origin, size);
+        let Some(client) = self.window_client() else {
+            return;
+        };
+        let scale = self.scale_factor();
+        let width = (size.width.as_f32() * scale).round() as i64;
+        let height = (size.height.as_f32() * scale).round() as i64;
+        if width <= 0 || height <= 0 {
+            return;
+        }
+        let window_id = self.window_id;
+        self.foreground_executor
+            .spawn(async move {
+                if let Err(error) = client.resize_window(window_id, width, height).await {
+                    warn!("Failed to resize OHOS window {window_id}: {error}");
+                }
+            })
+            .detach();
     }
 
     fn scale_factor(&self) -> f32 {
@@ -1441,11 +1460,11 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn modifiers(&self) -> Modifiers {
-        Modifiers::default()
+        self.key_state.borrow().modifiers()
     }
 
     fn capslock(&self) -> Capslock {
-        Capslock::default()
+        self.key_state.borrow().capslock()
     }
 
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
@@ -1758,7 +1777,27 @@ impl PlatformWindow for OhosWindow {
         false
     }
 
-    fn update_ime_position(&self, _bounds: Bounds<Pixels>) {
-        // There is no such thing on Windows.
+    fn update_ime_position(&self, bounds: Bounds<Pixels>) {
+        let Some(client) = self.window_client() else {
+            return;
+        };
+        let scale = self.scale_factor();
+        let x = (bounds.origin.x.as_f32() * scale).round() as i64;
+        let y = (bounds.origin.y.as_f32() * scale).round() as i64;
+        let window_id = self.window_id;
+        self.foreground_executor
+            .spawn(async move {
+                match client.set_ime_position(window_id, x, y).await {
+                    Ok(response) if response.ok || response.code == 12800009 => {}
+                    Ok(response) => warn!(
+                        "Failed to update OHOS IME position for window {window_id}: {} ({})",
+                        response.message, response.code
+                    ),
+                    Err(error) => {
+                        warn!("Failed to update OHOS IME position for window {window_id}: {error}")
+                    }
+                }
+            })
+            .detach();
     }
 }
