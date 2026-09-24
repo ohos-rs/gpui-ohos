@@ -1,7 +1,9 @@
+mod credentials;
 mod dispatcher;
 mod display;
 mod keyboard;
 mod platform;
+mod screen_capture;
 mod text_system;
 mod wgpu_atlas;
 mod wgpu_context;

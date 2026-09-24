@@ -42,6 +42,13 @@ pub struct WgpuTextureInfo {
 }
 
 impl WgpuAtlas {
+    pub fn render_resources(&self) -> (wgpu::BindGroupLayout, wgpu::Sampler) {
+        let state = self.0.lock();
+        (
+            state.texture_bind_group_layout.clone(),
+            state.sampler.clone(),
+        )
+    }
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,

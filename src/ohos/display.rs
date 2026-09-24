@@ -40,23 +40,22 @@ impl PlatformDisplay for OhosDisplay {
     }
 
     fn bounds(&self) -> Bounds<Pixels> {
-        // Get actual display bounds from content_rect (device px) and convert to logical px.
-        let content_rect = self.app.content_rect();
-        let scale = self.app.scale() as f32;
-        if content_rect.width > 0 && content_rect.height > 0 {
+        let (width, height) = self.app.display_size();
+        let scale = (self.app.scale() as f32).max(f32::EPSILON);
+        if width > 0 && height > 0 {
             Bounds::new(
-                point(
-                    px(content_rect.left as f32 / scale),
-                    px(content_rect.top as f32 / scale),
-                ),
-                size(
-                    px(content_rect.width as f32 / scale),
-                    px(content_rect.height as f32 / scale),
-                ),
+                point(px(0.0), px(0.0)),
+                size(px(width as f32 / scale), px(height as f32 / scale)),
             )
         } else {
-            // Fallback to default bounds if content_rect is not available yet
-            Bounds::new(point(px(0.0), px(0.0)), size(px(1080.0), px(1920.0)))
+            let content_rect = self.app.content_rect();
+            Bounds::new(
+                point(px(0.0), px(0.0)),
+                size(
+                    px(content_rect.width.max(1) as f32 / scale),
+                    px(content_rect.height.max(1) as f32 / scale),
+                ),
+            )
         }
     }
 

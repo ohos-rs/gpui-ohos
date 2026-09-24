@@ -1,0 +1,3 @@
+[submodule "example/ohos/vendor/openharmony-ability"]
+	path = example/ohos/vendor/openharmony-ability
+	url = git@github.com:richerfu/openharmony-ability.git

@@ -133,6 +133,7 @@ impl WgpuRenderer {
         context: &WgpuContext,
         window: &W,
         config: WgpuSurfaceConfig,
+        existing_atlas: Option<Arc<WgpuAtlas>>,
     ) -> anyhow::Result<Self> {
         let window_handle = window
             .window_handle()
@@ -230,7 +231,10 @@ impl WgpuRenderer {
         let dual_source_blending = context.supports_dual_source_blending();
 
         let rendering_params = RenderingParameters::new(&context.adapter, surface_format);
-        let bind_group_layouts = Self::create_bind_group_layouts(&device);
+        let mut bind_group_layouts = Self::create_bind_group_layouts(&device);
+        if let Some(atlas) = &existing_atlas {
+            bind_group_layouts.textures = atlas.render_resources().0;
+        }
         let pipelines = Self::create_pipelines(
             &device,
             &bind_group_layouts,
@@ -240,18 +244,24 @@ impl WgpuRenderer {
             dual_source_blending,
         );
 
-        let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("atlas_sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let atlas = Arc::new(WgpuAtlas::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            bind_group_layouts.textures.clone(),
-            atlas_sampler.clone(),
-        ));
+        let (atlas, atlas_sampler) = if let Some(atlas) = existing_atlas {
+            let (_, sampler) = atlas.render_resources();
+            (atlas, sampler)
+        } else {
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("atlas_sampler"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+            let atlas = Arc::new(WgpuAtlas::new(
+                Arc::clone(&device),
+                Arc::clone(&queue),
+                bind_group_layouts.textures.clone(),
+                sampler.clone(),
+            ));
+            (atlas, sampler)
+        };
 
         let uniform_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
         let globals_size = std::mem::size_of::<GlobalParams>() as u64;
