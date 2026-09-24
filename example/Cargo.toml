@@ -6,18 +6,22 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [lib]
-name = "gpui_ohos_example"
+name = "gpui_demo"
 crate-type = ["cdylib"]
 doctest = false
 test = false
 
 [dependencies]
+anyhow = "1"
+gpui = { git = "https://github.com/ohos-rs/zed", rev = "f45c7c22d0", default-features = false }
 gpui-ohos = { path = "..", default-features = false }
 log = "0.4"
+ohos-hilog-binding = { version = "*", features = ["log"] }
 napi-derive-ohos = "=1.2.0"
 napi-ohos = "=1.2.0"
-openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "ea5d815025d3cf349176536d22da2bb1a5880af6" }
-openharmony-ability-derive = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "ea5d815025d3cf349176536d22da2bb1a5880af6" }
+openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "13bbded" }
+openharmony-ability-derive = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "13bbded" }
+openharmony-ability-plugin-permission = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "13bbded" }
 
 [features]
 default = ["gles"]
@@ -29,3 +33,11 @@ napi-build-ohos = "=1.2.0"
 
 [workspace]
 resolver = "2"
+
+[patch.crates-io]
+ohos-accessibility-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
+ohos-accessibility-sys = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
+ohos-xcomponent-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
+ohos-xcomponent-sys = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
+ohos-arkui-input-sys = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
+ohos-arkui-input-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }

@@ -1,3 +1,4 @@
+mod credentials;
 mod dispatcher;
 mod display;
 mod keyboard;

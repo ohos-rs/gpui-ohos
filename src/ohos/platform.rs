@@ -2,24 +2,28 @@ use log::{debug, warn};
 
 use std::{
     cell::{Cell, RefCell},
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     rc::{Rc, Weak},
-    sync::Arc,
     sync::atomic::{AtomicUsize, Ordering},
+    sync::{Arc, Mutex},
 };
 
 use anyhow::Result;
 use futures::channel::oneshot;
 use openharmony_ability::{
     ColorMode, Event, OpenHarmonyApp, TouchInputDelivery, WindowCreateParams, create_os_window,
+    drain_pending_window_closes, drain_pending_window_status,
 };
 use openharmony_ability_plugin_app_control::{
     AppControlBridgePlugin, TerminateRequest, TerminateResponse,
 };
 use openharmony_ability_plugin_clipboard::{ClipboardBridgePlugin, ClipboardClient};
-use openharmony_ability_plugin_credentials::{CredentialsBridgePlugin, CredentialsClient};
 use openharmony_ability_plugin_files::{
     FileDialogOptions, FilesBridgePlugin, FilesExt as _, dialog_type,
+};
+use openharmony_ability_plugin_menu::{
+    MenuBridgePlugin, MenuClient, MenuItemData, MenuSetMenubarRequest, register_menu_event_sender,
 };
 use openharmony_ability_plugin_process::{ProcessBridgePlugin, ProcessExt as _};
 use openharmony_ability_plugin_url::{UrlBridgePlugin, UrlExt as _};
@@ -29,10 +33,11 @@ use sha2::{Digest, Sha256};
 use crate::{
     Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, ClipboardEntry,
     ClipboardItem, ClipboardReadError, CursorStyle, ExternalPaths, ForegroundExecutor,
-    GestureTuning, Image, ImageFormat, Keymap, Menu, MenuItem, OwnedMenu, PathPromptOptions,
-    Platform, PlatformDisplay, PlatformGestures, PlatformKeyboardLayout, PlatformKeyboardMapper,
-    PlatformTextSystem, PlatformWindow, PriorityQueueReceiver, Result as GpuiResult,
-    RunnableVariant, ScrollPhysics, Task, ThermalState, WindowAppearance, WindowParams,
+    GestureTuning, Image, ImageFormat, Keymap, Menu, MenuItem, OwnedMenu, OwnedMenuItem,
+    PathPromptOptions, Platform, PlatformDisplay, PlatformGestures, PlatformKeyboardLayout,
+    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, PriorityQueueReceiver,
+    Result as GpuiResult, RunnableVariant, ScrollPhysics, Task, ThermalState, WindowAppearance,
+    WindowParams,
 };
 
 use super::{
@@ -57,6 +62,100 @@ pub(crate) struct OhosPlatform {
     cursor_hidden_until_move: Rc<Cell<bool>>,
     cursor_window_id: Rc<Cell<i64>>,
     idle_sleep_guards: Arc<AtomicUsize>,
+    menus: Rc<RefCell<MenuState>>,
+    menu_events: Arc<Mutex<VecDeque<String>>>,
+}
+
+#[derive(Default)]
+struct MenuState {
+    menus: Option<Vec<OwnedMenu>>,
+    json: String,
+    actions: HashMap<String, Box<dyn Action>>,
+    next_id: u64,
+    on_action: Option<Box<dyn FnMut(&dyn Action)>>,
+}
+
+fn menu_items(
+    items: &[OwnedMenuItem],
+    state: &mut MenuState,
+    keymap: &Keymap,
+) -> Vec<MenuItemData> {
+    items
+        .iter()
+        .map(|item| {
+            let id = format!("gpui-menu-{}", state.next_id);
+            state.next_id += 1;
+            let (item_type, text, enabled, checked, submenu_items, accelerator) = match item {
+                OwnedMenuItem::Separator => ("separator", None, None, None, None, None),
+                OwnedMenuItem::Submenu(menu) => (
+                    "submenu",
+                    Some(menu.name.to_string()),
+                    Some(!menu.disabled),
+                    None,
+                    Some(menu_items(&menu.items, state, keymap)),
+                    None,
+                ),
+                OwnedMenuItem::SystemMenu(menu) => (
+                    "submenu",
+                    Some(menu.name.to_string()),
+                    Some(true),
+                    None,
+                    Some(Vec::new()),
+                    None,
+                ),
+                OwnedMenuItem::Action {
+                    name,
+                    action,
+                    checked,
+                    disabled,
+                    ..
+                } => {
+                    let accelerator = keymap
+                        .bindings_for_action(action.as_ref())
+                        .filter(|binding| binding.keystrokes().len() == 1)
+                        .last()
+                        .map(|binding| {
+                            let key = &binding.keystrokes()[0];
+                            let modifiers = key.modifiers();
+                            let mut parts = Vec::new();
+                            if modifiers.control || modifiers.platform {
+                                parts.push("Ctrl");
+                            }
+                            if modifiers.shift {
+                                parts.push("Shift");
+                            }
+                            if modifiers.alt {
+                                parts.push("Alt");
+                            }
+                            parts.push(key.key());
+                            parts.join("+")
+                        });
+                    state.actions.insert(id.clone(), action.boxed_clone());
+                    (
+                        "item",
+                        Some(name.clone()),
+                        Some(!disabled),
+                        Some(*checked),
+                        None,
+                        accelerator,
+                    )
+                }
+            };
+            MenuItemData {
+                id,
+                item_type: item_type.into(),
+                text,
+                enabled,
+                accelerator,
+                predefined_type: None,
+                checked,
+                icon: None,
+                native_icon: None,
+                submenu_items,
+                about_metadata: None,
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn appearance_for_color_mode(mode: ColorMode) -> WindowAppearance {
@@ -98,6 +197,18 @@ impl OhosPlatform {
         let background_executor = BackgroundExecutor::new(dispatcher.clone());
         let foreground_executor = ForegroundExecutor::new(dispatcher.clone());
         let text_system = Arc::new(OhosTextSystem::new());
+        let menu_events = Arc::new(Mutex::new(VecDeque::new()));
+        let (menu_sender, menu_receiver) = crossbeam_channel::unbounded();
+        register_menu_event_sender(menu_sender);
+        let pending_menu_events = menu_events.clone();
+        let menu_waker = app.create_waker();
+        std::thread::spawn(move || {
+            while let Ok(id) = menu_receiver.recv() {
+                log::info!("OHOS menu event received: {id}");
+                pending_menu_events.lock().unwrap().push_back(id);
+                menu_waker.wake();
+            }
+        });
 
         // Initialize GPU context for WGPU renderer.
         // Note: ZED_DEVICE_ID environment variable is optional - if not set, device_id defaults to 0
@@ -128,6 +239,8 @@ impl OhosPlatform {
             cursor_hidden_until_move: Rc::new(Cell::new(false)),
             cursor_window_id: Rc::new(Cell::new(0)),
             idle_sleep_guards: Arc::new(AtomicUsize::new(0)),
+            menus: Rc::new(RefCell::new(MenuState::default())),
+            menu_events,
         };
         platform.set_app(app);
         Ok(platform)
@@ -173,8 +286,8 @@ impl OhosPlatform {
         }
         for result in [
             app.register_plugin(ClipboardBridgePlugin),
-            app.register_plugin(CredentialsBridgePlugin),
             app.register_plugin(FilesBridgePlugin),
+            app.register_plugin(MenuBridgePlugin),
             app.register_plugin(ProcessBridgePlugin),
             app.register_plugin(WindowBridgePlugin),
         ] {
@@ -194,6 +307,59 @@ impl OhosPlatform {
         let mut receiver = self.main_receiver.clone();
         while let Ok(Some(runnable)) = receiver.try_pop() {
             OhosDispatcher::execute_runnable(runnable);
+        }
+    }
+
+    fn publish_menu(&self, window_id: i64) {
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        let json_data = self.menus.borrow().json.clone();
+        if json_data.is_empty() {
+            return;
+        }
+        self.background_executor
+            .spawn(async move {
+                let result = async {
+                    MenuClient::new(&app)?
+                        .set_menubar(MenuSetMenubarRequest {
+                            json_data,
+                            window_id: if window_id == 0 {
+                                "main".into()
+                            } else {
+                                window_id.to_string()
+                            },
+                        })
+                        .await
+                }
+                .await;
+                if let Err(error) = result {
+                    warn!("Failed to publish OHOS menu for window {window_id}: {error}");
+                }
+            })
+            .detach();
+    }
+
+    fn dispatch_menu_events(&self) {
+        loop {
+            let id = self.menu_events.lock().unwrap().pop_front();
+            let Some(id) = id else { break };
+            let action = self
+                .menus
+                .borrow()
+                .actions
+                .get(&id)
+                .map(|action| action.boxed_clone());
+            let Some(action) = action else {
+                warn!("Unknown OHOS menu item {id}");
+                continue;
+            };
+            log::info!("Dispatching OHOS menu action {id}");
+            let mut on_action = self.menus.borrow_mut().on_action.take();
+            if let Some(ref mut callback) = on_action {
+                callback(action.as_ref());
+            }
+            self.menus.borrow_mut().on_action = on_action;
         }
     }
 
@@ -241,6 +407,7 @@ impl OhosPlatform {
         // This ensures tasks are processed in the run_loop, integrating GPUI with OpenHarmony's event loop
         self.run_foreground_tasks();
         self.dispatcher.run_due_timers();
+        self.dispatch_menu_events();
 
         // Handle on_finish_launching callback first, before routing to windows.
         // This is critical because windows are created INSIDE the on_finish_launching callback,
@@ -270,6 +437,35 @@ impl OhosPlatform {
 
         if live_windows.is_empty() {
             warn!("OhosPlatform: No active windows to handle event");
+        }
+
+        for (window_id, status) in drain_pending_window_status() {
+            if let Some(window) = live_windows
+                .iter()
+                .find(|window| window.borrow().window_id() == i64::from(window_id))
+            {
+                window.borrow().apply_window_status(status);
+            }
+        }
+
+        // FloatPage reports native close-button and system closes through this
+        // queue. GPUI must consume it so its window registry and close observers
+        // are updated even when no SubWindowClosed event is emitted.
+        for window_id in drain_pending_window_closes() {
+            if let Some(window) = live_windows
+                .iter()
+                .find(|window| window.borrow().window_id() == i64::from(window_id))
+            {
+                window.borrow().handle_event(&Event::WindowDestroy);
+            }
+        }
+
+        // VSync callbacks originate on a native thread. Render on the Ability
+        // thread after its waker has returned control to this event loop.
+        for window in &live_windows {
+            if window.borrow().take_pending_frame() {
+                window.borrow().draw_requested_frame();
+            }
         }
 
         for window in live_windows {
@@ -338,6 +534,11 @@ impl OhosPlatform {
                 Event::KeyboardEvent(_) if id != 0 => {}
                 _ => window.borrow().handle_event(event),
             }
+        }
+        match event {
+            Event::SurfaceCreate => self.publish_menu(0),
+            Event::SubWindowSurfaceCreate(window_id) => self.publish_menu(*window_id),
+            _ => {}
         }
     }
 }
@@ -409,6 +610,8 @@ impl Clone for OhosPlatform {
             cursor_hidden_until_move: self.cursor_hidden_until_move.clone(),
             cursor_window_id: self.cursor_window_id.clone(),
             idle_sleep_guards: self.idle_sleep_guards.clone(),
+            menus: self.menus.clone(),
+            menu_events: self.menu_events.clone(),
         }
     }
 }
@@ -841,20 +1044,59 @@ impl Platform for OhosPlatform {
         // Not supported on OHOS
     }
 
-    fn set_menus(&self, _menus: Vec<Menu>, _keymap: &Keymap) {
-        // Not supported on OHOS
+    fn set_menus(&self, menus: Vec<Menu>, keymap: &Keymap) {
+        let owned: Vec<OwnedMenu> = menus.into_iter().map(Menu::owned).collect();
+        {
+            let mut state = self.menus.borrow_mut();
+            state.actions.clear();
+            let mut items = Vec::with_capacity(owned.len());
+            for menu in &owned {
+                let id = format!("gpui-menu-{}", state.next_id);
+                state.next_id += 1;
+                items.push(MenuItemData {
+                    id,
+                    item_type: "submenu".into(),
+                    text: Some(menu.name.to_string()),
+                    enabled: Some(!menu.disabled),
+                    accelerator: None,
+                    predefined_type: None,
+                    checked: None,
+                    icon: None,
+                    native_icon: None,
+                    submenu_items: Some(menu_items(&menu.items, &mut state, keymap)),
+                    about_metadata: None,
+                });
+            }
+            match serde_json::to_string(&items) {
+                Ok(json) => {
+                    state.json = json;
+                    state.menus = Some(owned);
+                }
+                Err(error) => {
+                    warn!("Failed to serialize OHOS app menu: {error}");
+                    return;
+                }
+            }
+        }
+        self.publish_menu(0);
+        for window in self.windows.borrow().iter().filter_map(Weak::upgrade) {
+            let id = window.borrow().window_id();
+            if id != 0 {
+                self.publish_menu(id);
+            }
+        }
     }
 
     fn get_menus(&self) -> Option<Vec<OwnedMenu>> {
-        None
+        self.menus.borrow().menus.clone()
     }
 
     fn set_dock_menu(&self, _menu: Vec<MenuItem>, _keymap: &Keymap) {
         // Not supported on OHOS
     }
 
-    fn on_app_menu_action(&self, _callback: Box<dyn FnMut(&dyn Action)>) {
-        // Not supported on OHOS
+    fn on_app_menu_action(&self, callback: Box<dyn FnMut(&dyn Action)>) {
+        self.menus.borrow_mut().on_action = Some(callback);
     }
 
     fn on_will_open_app_menu(&self, _callback: Box<dyn FnMut()>) {
@@ -1016,38 +1258,23 @@ impl Platform for OhosPlatform {
     }
 
     fn write_credentials(&self, url: &str, username: &str, password: &[u8]) -> Task<Result<()>> {
-        let Some(app) = self.app.borrow().clone() else {
-            return Task::ready(Err(anyhow::anyhow!("OpenHarmonyApp not set")));
-        };
         let alias = credential_alias(url);
         let username = username.to_owned();
         let password = password.to_vec();
-        self.background_executor.spawn(async move {
-            CredentialsClient::new(&app)?
-                .write(alias, username, password)
-                .await?;
-            Ok(())
-        })
+        self.background_executor
+            .spawn(async move { super::credentials::write(&alias, &username, &password) })
     }
 
     fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
-        let Some(app) = self.app.borrow().clone() else {
-            return Task::ready(Err(anyhow::anyhow!("OpenHarmonyApp not set")));
-        };
         let alias = credential_alias(url);
         self.background_executor
-            .spawn(async move { Ok(CredentialsClient::new(&app)?.read(alias).await?) })
+            .spawn(async move { super::credentials::read(&alias) })
     }
 
     fn delete_credentials(&self, url: &str) -> Task<Result<()>> {
-        let Some(app) = self.app.borrow().clone() else {
-            return Task::ready(Err(anyhow::anyhow!("OpenHarmonyApp not set")));
-        };
         let alias = credential_alias(url);
-        self.background_executor.spawn(async move {
-            CredentialsClient::new(&app)?.delete(alias).await?;
-            Ok(())
-        })
+        self.background_executor
+            .spawn(async move { super::credentials::delete(&alias) })
     }
 
     fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout> {

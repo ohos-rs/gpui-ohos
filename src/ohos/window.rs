@@ -4,7 +4,10 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
@@ -12,9 +15,10 @@ use accesskit_ohos::Adapter as OhosA11yAdapter;
 use anyhow::Result;
 use futures::channel::oneshot;
 use ohos_accessibility_binding::Provider;
+use ohos_vsync_binding::Vsync;
 use openharmony_ability::{
-    ArkUiInputEvent, AvoidAreaType, Event, ImeEvent, InputEvent, OpenHarmonyApp, PointerInputData,
-    XComponentInputEvent,
+    ArkUiInputEvent, AvoidAreaType, Event, ImeEvent, InputEvent, OpenHarmonyApp, OpenHarmonyWaker,
+    PointerInputData, XComponentInputEvent,
     arkui::arkui_input_binding::{UIInputAction, UIInputToolType},
     xcomponent::{
         MouseAction, MouseButton as OhosMouseButton, TouchEvent as OhosTouchEvent, TouchEventData,
@@ -48,6 +52,8 @@ pub(crate) struct OhosWindow {
     scale: RefCell<f32>,
     appearance: Cell<WindowAppearance>,
     window_id: i64,
+    frame_scheduler: Option<Arc<FrameScheduler>>,
+    closed: Cell<bool>,
     maximized: Rc<Cell<bool>>,
     fullscreen: Rc<Cell<bool>>,
     background_appearance: Rc<Cell<WindowBackgroundAppearance>>,
@@ -78,6 +84,50 @@ pub(crate) struct OhosWindow {
     next_touch_id: Cell<u64>,
 }
 
+/// GPUI invalidation requests a system VSync. The native callback only records
+/// the tick; drawing stays on the Ability's main thread.
+struct FrameScheduler {
+    vsync: Vsync,
+    pending: Arc<AtomicBool>,
+    requested: Arc<AtomicBool>,
+    active: AtomicBool,
+    waker: OpenHarmonyWaker,
+}
+
+impl FrameScheduler {
+    fn new(window_id: i64, waker: OpenHarmonyWaker) -> Option<Arc<Self>> {
+        Some(Arc::new(Self {
+            vsync: Vsync::try_new(format!("gpui-ohos-{window_id}"))?,
+            pending: Arc::new(AtomicBool::new(false)),
+            requested: Arc::new(AtomicBool::new(false)),
+            active: AtomicBool::new(true),
+            waker,
+        }))
+    }
+
+    fn request_frame(&self) {
+        if !self.active.load(Ordering::Acquire) || self.requested.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let pending = self.pending.clone();
+        let requested = self.requested.clone();
+        let waker = self.waker.clone();
+        let result = self.vsync.request_frame_once(move |_| {
+            pending.store(true, Ordering::Release);
+            requested.store(false, Ordering::Release);
+            waker.wake();
+        });
+        if result != 0 {
+            self.requested.store(false, Ordering::Release);
+            warn!("Failed to request OHOS VSync frame: {result}");
+        }
+    }
+
+    fn take_pending(&self) -> bool {
+        self.pending.swap(false, Ordering::AcqRel)
+    }
+}
+
 pub(crate) struct OhosWindowHandle {
     inner: Rc<RefCell<OhosWindow>>,
     input_handler: Rc<RefCell<Option<PlatformInputHandler>>>,
@@ -86,7 +136,7 @@ pub(crate) struct OhosWindowHandle {
 impl Drop for OhosWindow {
     fn drop(&mut self) {
         self.release_accessibility();
-        if self.window_id == 0 {
+        if self.window_id == 0 || self.closed.get() {
             return;
         }
         let Some(client) = self.window_client() else {
@@ -261,6 +311,13 @@ impl OhosWindow {
             .map(|app| appearance_for_color_mode(app.config().color_mode))
             .unwrap_or_default();
         let bounds = params.bounds;
+        let frame_scheduler = app
+            .borrow()
+            .as_ref()
+            .and_then(|app| FrameScheduler::new(window_id, app.create_waker()));
+        if frame_scheduler.is_none() {
+            warn!("OHOS VSync is unavailable for window {window_id}");
+        }
 
         // Don't create renderer immediately - native_window may not be available yet.
         // Renderer will be initialized lazily in draw() or when SurfaceCreate event is received.
@@ -273,6 +330,8 @@ impl OhosWindow {
             scale: RefCell::new(scale),
             appearance: Cell::new(appearance),
             window_id,
+            frame_scheduler,
+            closed: Cell::new(false),
             maximized: Rc::new(Cell::new(false)),
             fullscreen: Rc::new(Cell::new(false)),
             background_appearance: Rc::new(Cell::new(WindowBackgroundAppearance::Opaque)),
@@ -323,6 +382,52 @@ impl OhosWindow {
 
     pub(crate) fn window_id(&self) -> i64 {
         self.window_id
+    }
+
+    pub(crate) fn take_pending_frame(&self) -> bool {
+        !self.closed.get()
+            && self
+                .frame_scheduler
+                .as_ref()
+                .is_some_and(|scheduler| scheduler.take_pending())
+    }
+
+    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
+        let scheduler = self.frame_scheduler.as_ref()?.clone();
+        Some(Rc::new(move || scheduler.request_frame()))
+    }
+
+    pub(crate) fn draw_requested_frame(&self) {
+        if self.closed.get() {
+            return;
+        }
+        let mut callback = self.callbacks.borrow_mut().request_frame.take();
+        if let Some(ref mut callback) = callback {
+            callback(RequestFrameOptions {
+                require_presentation: false,
+                force_render: false,
+            });
+        }
+        self.callbacks.borrow_mut().request_frame = callback;
+    }
+
+    pub(crate) fn apply_window_status(&self, status: i32) {
+        // OHOS WindowStatusType: FULL_SCREEN=1, MAXIMIZE=2,
+        // MINIMIZE=3, FLOATING=4, SPLIT_SCREEN=5.
+        if !(1..=5).contains(&status) {
+            warn!(
+                "Unknown OHOS window status {status} for window {}",
+                self.window_id
+            );
+            return;
+        }
+        self.maximized.set(status == 2);
+        self.fullscreen.set(status == 1);
+        self.update_visibility(if status == 3 {
+            WindowVisibility::Hidden
+        } else {
+            WindowVisibility::Visible
+        });
     }
 
     fn dispatch_input_with_callbacks(
@@ -936,7 +1041,7 @@ impl OhosWindow {
         };
 
         debug!(
-            "OhosWindow: Surface config - width: {}, height: {}, transparent: false",
+            "OhosWindow: Surface config - width: {}, height: {}, transparent: true",
             device_width, device_height
         );
 
@@ -1093,20 +1198,7 @@ impl OhosWindow {
             Event::Start => self.update_visibility(WindowVisibility::Visible),
             Event::Stop => self.update_visibility(WindowVisibility::Hidden),
             Event::WindowRedraw(_) => {
-                // Take the callback out to avoid holding borrow during execution
-                // This is critical because the callback will eventually call window.draw()
-                // which may access other parts of OhosWindow
-                let mut callback = self.callbacks.borrow_mut().request_frame.take();
-                if let Some(ref mut cb) = callback {
-                    cb(RequestFrameOptions {
-                        require_presentation: false,
-                        force_render: false,
-                    });
-                } else {
-                    warn!("OhosWindow: WindowRedraw event but no request_frame callback set");
-                }
-                // Put it back for next frame
-                self.callbacks.borrow_mut().request_frame = callback;
+                self.draw_requested_frame();
             }
             Event::Input(input_event) => {
                 self.handle_input_event(input_event);
@@ -1160,26 +1252,22 @@ impl OhosWindow {
                 self.refresh_insets();
             }
             Event::WindowDestroy => {
+                if self.closed.replace(true) {
+                    return;
+                }
+                if let Some(scheduler) = &self.frame_scheduler {
+                    scheduler.active.store(false, Ordering::Release);
+                }
                 self.update_visibility(WindowVisibility::Hidden);
                 self.active.set(false);
                 self.set_hovered(false);
                 if self.refresh_keyboard_overlap_device_px() {
                     self.emit_resize_callback();
                 }
-                // For should_close, we need to call it and check return value
-                let mut should_close_callback = self.callbacks.borrow_mut().should_close.take();
-                let should_close = if let Some(ref mut cb) = should_close_callback {
-                    cb()
-                } else {
-                    true // Default to allowing close if no callback
-                };
-                self.callbacks.borrow_mut().should_close = should_close_callback;
-
-                if should_close {
-                    // close is FnOnce, so we just take and call it
-                    if let Some(callback) = self.callbacks.borrow_mut().close.take() {
-                        callback();
-                    }
+                // The native window has already been destroyed. A close veto
+                // cannot restore it, so always release GPUI's window state.
+                if let Some(callback) = self.callbacks.borrow_mut().close.take() {
+                    callback();
                 }
             }
             Event::KeyboardEvent(height) => {
@@ -1533,6 +1621,10 @@ impl PlatformWindow for OhosWindowHandle {
         self.with_window(|window| window.is_fullscreen())
     }
 
+    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
+        self.with_window(OhosWindow::frame_waker)
+    }
+
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
         self.with_window(|window| window.on_request_frame(callback))
     }
@@ -1745,15 +1837,28 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
+        // The default Opaque appearance does not specify a color. Keep the
+        // native window's system background until an actual transition occurs.
+        if self.background_appearance.get() == appearance {
+            return;
+        }
         let Some(client) = self.window_client() else {
             return;
         };
         let window_id = self.window_id;
         let current = self.background_appearance.clone();
+        let window_appearance = self.appearance.get();
         self.foreground_executor
             .spawn(async move {
                 let color = if appearance == WindowBackgroundAppearance::Opaque {
-                    0xff000000
+                    if matches!(
+                        window_appearance,
+                        WindowAppearance::Dark | WindowAppearance::VibrantDark
+                    ) {
+                        0xff000000
+                    } else {
+                        0xffffffff
+                    }
                 } else {
                     0x00000000
                 };
@@ -1828,6 +1933,10 @@ impl PlatformWindow for OhosWindow {
 
     fn is_fullscreen(&self) -> bool {
         self.fullscreen.get()
+    }
+
+    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
+        OhosWindow::frame_waker(self)
     }
 
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
