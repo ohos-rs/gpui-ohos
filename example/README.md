@@ -7,11 +7,12 @@ current screen exposes these checks:
   using the native AssetStore binding.
 - **Screen capture** starts and stops a display capture stream and shows the
   number of video frames received.
-- **Second window** opens another GPUI window with a click counter, a GPUI
-  maximize/fullscreen/visibility state check, clipboard write/read check, and
-  system file picker.
+- **Child windows** open three independent GPUI windows (A, B, and C). Each
+  has its own click counter, GPUI maximize/fullscreen/visibility state check,
+  clipboard write/read check, and system file picker. Closing one updates only
+  its status in the main window; it can then be opened again.
 - **Menu** shows a GPUI app menu. Choosing its action increments the counter in
-  both windows.
+  every open window.
 
 Clipboard read requires `ohos.permission.READ_PASTEBOARD` in the module manifest
 and a signing profile whose ACL grants that permission. The example does not

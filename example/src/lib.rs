@@ -24,19 +24,37 @@ thread_local! {
 
 actions!(gpui_ohos_example, [CountMenuAction]);
 
+const CHILD_WINDOW_LABELS: [&str; 3] = ["A", "B", "C"];
+
+struct ChildWindowState {
+    id: Option<WindowId>,
+    status: String,
+    opens: u32,
+}
+
+impl ChildWindowState {
+    fn new() -> Self {
+        Self {
+            id: None,
+            status: "idle".into(),
+            opens: 0,
+        }
+    }
+}
+
 struct CaptureDemo {
     app: OpenHarmonyApp,
     status: String,
     credentials: String,
-    second_window: String,
-    second_window_id: Option<WindowId>,
+    child_windows: [ChildWindowState; CHILD_WINDOW_LABELS.len()],
     menu_actions: Arc<AtomicUsize>,
     frames: Arc<AtomicUsize>,
     stream: Option<Box<dyn gpui_ohos::ScreenCaptureStream>>,
 }
 
-struct SecondWindowDemo {
+struct ChildWindowDemo {
     app: OpenHarmonyApp,
+    label: &'static str,
     clicks: u32,
     clipboard: String,
     picker: String,
@@ -44,7 +62,7 @@ struct SecondWindowDemo {
     menu_actions: Arc<AtomicUsize>,
 }
 
-impl Render for SecondWindowDemo {
+impl Render for ChildWindowDemo {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
@@ -53,7 +71,7 @@ impl Render for SecondWindowDemo {
             .gap_4()
             .p_4()
             .text_color(rgb(0x18181b))
-            .child("Second GPUI window")
+            .child(format!("GPUI child window {}", self.label))
             .child(format!(
                 "Menu actions: {}",
                 self.menu_actions.load(Ordering::Relaxed)
@@ -72,7 +90,11 @@ impl Render for SecondWindowDemo {
                             window.is_fullscreen(),
                             window.visibility()
                         );
-                        log::info!("Second GPUI window state: {}", this.window_state);
+                        log::info!(
+                            "GPUI child window {} state: {}",
+                            this.label,
+                            this.window_state
+                        );
                         cx.notify();
                     })),
             )
@@ -84,7 +106,11 @@ impl Render for SecondWindowDemo {
                     .child(format!("Clicks: {}", self.clicks))
                     .on_click(cx.listener(|this, _event, _window, cx| {
                         this.clicks += 1;
-                        log::info!("Second GPUI window click count: {}", this.clicks);
+                        log::info!(
+                            "GPUI child window {} click count: {}",
+                            this.label,
+                            this.clicks
+                        );
                         cx.notify();
                     })),
             )
@@ -164,8 +190,73 @@ impl Render for SecondWindowDemo {
     }
 }
 
+impl CaptureDemo {
+    fn open_child_window(&mut self, index: usize, cx: &mut Context<Self>) {
+        let state = &mut self.child_windows[index];
+        if state.id.is_some() {
+            return;
+        }
+
+        let app = self.app.clone();
+        let label = CHILD_WINDOW_LABELS[index];
+        let menu_actions = self.menu_actions.clone();
+        let result = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(20. + index as f32 * 340.), px(60.)),
+                    size(px(320.), px(360.)),
+                ))),
+                ..Default::default()
+            },
+            move |_, cx| {
+                cx.new(|_| ChildWindowDemo {
+                    app,
+                    label,
+                    clicks: 0,
+                    clipboard: "idle".into(),
+                    picker: "idle".into(),
+                    window_state: "unread".into(),
+                    menu_actions,
+                })
+            },
+        );
+        match result {
+            Ok(handle) => {
+                state.id = Some(handle.window_id());
+                state.opens += 1;
+                state.status = format!("open (launch #{})", state.opens);
+            }
+            Err(error) => state.status = format!("error: {error}"),
+        }
+        cx.notify();
+    }
+}
+
 impl Render for CaptureDemo {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let child_controls = self
+            .child_windows
+            .iter()
+            .enumerate()
+            .map(|(index, state)| {
+                let action = if state.id.is_some() {
+                    "already open"
+                } else {
+                    "tap to open"
+                };
+                div()
+                    .id(format!("open-child-window-{index}"))
+                    .p_4()
+                    .bg(rgb(0x7c3aed))
+                    .child(format!(
+                        "Window {}: {} — {action}",
+                        CHILD_WINDOW_LABELS[index], state.status,
+                    ))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.open_child_window(index, cx);
+                    }))
+            })
+            .collect::<Vec<_>>();
         div()
             .flex()
             .size_full()
@@ -182,52 +273,11 @@ impl Render for CaptureDemo {
                 self.frames.load(Ordering::Relaxed)
             ))
             .child(format!("Credential check: {}", self.credentials))
-            .child(format!("Second window: {}", self.second_window))
             .child(format!(
                 "Menu actions: {}",
                 self.menu_actions.load(Ordering::Relaxed)
             ))
-            .child(
-                div()
-                    .id("open-second-window")
-                    .p_4()
-                    .bg(rgb(0x7c3aed))
-                    .child("Open second GPUI window")
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        if this.second_window_id.is_some() {
-                            return;
-                        }
-                        let app = this.app.clone();
-                        let menu_actions = this.menu_actions.clone();
-                        let result = cx.open_window(
-                            WindowOptions {
-                                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                                    point(px(20.), px(60.)),
-                                    size(px(320.), px(360.)),
-                                ))),
-                                ..Default::default()
-                            },
-                            move |_, cx| {
-                                cx.new(|_| SecondWindowDemo {
-                                    app,
-                                    clicks: 0,
-                                    clipboard: "idle".into(),
-                                    picker: "idle".into(),
-                                    window_state: "unread".into(),
-                                    menu_actions,
-                                })
-                            },
-                        );
-                        this.second_window = match result {
-                            Ok(handle) => {
-                                this.second_window_id = Some(handle.window_id());
-                                "opened".into()
-                            }
-                            Err(error) => format!("error: {error}"),
-                        };
-                        cx.notify();
-                    })),
-            )
+            .children(child_controls)
             .child(
                 div()
                     .id("check-credentials")
@@ -385,9 +435,13 @@ fn openharmony_app(app: OpenHarmonyApp) {
         cx.on_window_closed(move |cx, window_id| {
             if let Some(view) = closed_view.borrow().as_ref() {
                 let _ = view.update(cx, |this, cx| {
-                    if this.second_window_id == Some(window_id) {
-                        this.second_window_id = None;
-                        this.second_window = "closed".into();
+                    if let Some(state) = this
+                        .child_windows
+                        .iter_mut()
+                        .find(|state| state.id == Some(window_id))
+                    {
+                        state.id = None;
+                        state.status = "closed".into();
                         cx.notify();
                     }
                 });
@@ -424,8 +478,7 @@ fn openharmony_app(app: OpenHarmonyApp) {
                     app: inner_app.clone(),
                     status: "idle".into(),
                     credentials: "idle".into(),
-                    second_window: "idle".into(),
-                    second_window_id: None,
+                    child_windows: std::array::from_fn(|_| ChildWindowState::new()),
                     menu_actions: menu_actions.clone(),
                     frames: Arc::new(AtomicUsize::new(0)),
                     stream: None,
