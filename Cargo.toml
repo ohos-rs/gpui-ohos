@@ -18,14 +18,14 @@ gpui = { git = "https://github.com/ohos-rs/zed", rev = "f45c7c22d0", default-fea
 itertools = "0.14.0"
 image = { version = "0.25.1", default-features = false }
 log = "0.4"
-openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "13bbded" }
-openharmony-ability-plugin-app-control = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "13bbded" }
-openharmony-ability-plugin-clipboard = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "13bbded" }
-openharmony-ability-plugin-files = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "13bbded" }
-openharmony-ability-plugin-menu = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "13bbded" }
-openharmony-ability-plugin-process = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "13bbded" }
-openharmony-ability-plugin-url = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "13bbded" }
-openharmony-ability-plugin-window = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "13bbded" }
+openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5344d86" }
+openharmony-ability-plugin-app-control = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5344d86" }
+openharmony-ability-plugin-clipboard = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5344d86" }
+openharmony-ability-plugin-files = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5344d86" }
+openharmony-ability-plugin-menu = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5344d86" }
+openharmony-ability-plugin-process = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5344d86" }
+openharmony-ability-plugin-url = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5344d86" }
+openharmony-ability-plugin-window = { git = "https://github.com/richerfu/openharmony-ability.git", rev = "5344d86" }
 parking_lot = "0.12.1"
 profiling = "1"
 raw-window-handle = "0.6"
