@@ -5,6 +5,7 @@ mod keyboard;
 mod platform;
 mod screen_capture;
 mod text_system;
+mod touch_scroll;
 mod wgpu_atlas;
 mod wgpu_context;
 mod wgpu_renderer;

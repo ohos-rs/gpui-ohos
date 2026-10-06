@@ -33,11 +33,11 @@ use sha2::{Digest, Sha256};
 use crate::{
     Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, ClipboardEntry,
     ClipboardItem, ClipboardReadError, CursorStyle, ExternalPaths, ForegroundExecutor,
-    GestureTuning, Image, ImageFormat, Keymap, Menu, MenuItem, OwnedMenu, OwnedMenuItem,
-    PathPromptOptions, Platform, PlatformDisplay, PlatformGestures, PlatformKeyboardLayout,
-    PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow, PriorityQueueReceiver,
-    Result as GpuiResult, RunnableVariant, ScrollPhysics, Task, ThermalState, WindowAppearance,
-    WindowParams,
+    GestureKinds, GestureTuning, Image, ImageFormat, Keymap, Menu, MenuItem, OwnedMenu,
+    OwnedMenuItem, PathPromptOptions, Platform, PlatformDisplay, PlatformGestures,
+    PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow,
+    PriorityQueueReceiver, Result as GpuiResult, RunnableVariant, ScrollPhysics, Task,
+    ThermalState, WindowAppearance, WindowParams,
 };
 
 use super::{
@@ -275,8 +275,8 @@ impl OhosPlatform {
             *handler.borrow_mut() = callback;
             handled
         });
-        if let Err(error) = app.set_touch_input_delivery(TouchInputDelivery::RawXComponent) {
-            warn!("Failed to configure raw touch input for GPUI: {error}");
+        if let Err(error) = app.set_touch_input_delivery(TouchInputDelivery::Both) {
+            warn!("Failed to configure system pan and raw control input for GPUI: {error}");
         }
         if let Err(error) = app.register_plugin(AppControlBridgePlugin) {
             warn!("Failed to register OpenHarmony app-control plugin: {error}");
@@ -460,15 +460,7 @@ impl OhosPlatform {
             }
         }
 
-        // VSync callbacks originate on a native thread. Render on the Ability
-        // thread after its waker has returned control to this event loop.
         for window in &live_windows {
-            if window.borrow().take_pending_frame() {
-                window.borrow().draw_requested_frame();
-            }
-        }
-
-        for window in live_windows {
             let id = window.borrow().window_id();
             match event {
                 Event::SubWindowSurfaceCreate(window_id) if id == *window_id => {
@@ -540,6 +532,15 @@ impl OhosPlatform {
             Event::SubWindowSurfaceCreate(window_id) => self.publish_menu(*window_id),
             _ => {}
         }
+
+        // Apply visibility and surface lifecycle before draining VSync. A
+        // queued frame must not present to a surface the system just hid or
+        // destroyed; GLES presentation can otherwise block requesting a buffer.
+        for window in &live_windows {
+            if window.borrow().take_pending_frame() {
+                window.borrow().draw_requested_frame();
+            }
+        }
     }
 }
 
@@ -580,6 +581,15 @@ fn selected_paths(uris: Vec<String>, writable: bool) -> Result<Option<Vec<PathBu
 struct OhosGestures;
 
 impl PlatformGestures for OhosGestures {
+    fn native_recognizers(&self) -> GestureKinds {
+        GestureKinds {
+            tap: true,
+            long_press: true,
+            pan: true,
+            pinch: false,
+        }
+    }
+
     fn tuning(&self) -> GestureTuning {
         GestureTuning {
             // HarmonyOS touch coordinates are converted to logical pixels before

@@ -31,6 +31,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use super::display::OhosDisplay;
 use super::keyboard::OhosKeyState;
 use super::platform::appearance_for_color_mode;
+use super::touch_scroll::{NativePanInput, TouchScroll};
 use super::wgpu_atlas::WgpuAtlas;
 use super::wgpu_context::WgpuContext;
 use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
@@ -39,7 +40,7 @@ use crate::{
     GestureTuning, GpuSpecs, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     NavigationDirection, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
     PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, TextInputStateChange, TouchEvent,
+    ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, Task, TextInputStateChange, TouchEvent,
     TouchId, TouchPhase, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowControlArea, WindowControls, WindowDecorations, WindowInsets, WindowParams,
     WindowVisibility, accesskit, point, px, size,
@@ -66,6 +67,7 @@ pub(crate) struct OhosWindow {
     input_handler: Rc<RefCell<Option<PlatformInputHandler>>>,
     callbacks: Rc<RefCell<WindowCallbacks>>,
     renderer: RefCell<Option<WgpuRenderer>>,
+    surface_available: Cell<bool>,
     gpu_context: Arc<WgpuContext>,
     fallback_atlas: RefCell<Option<Arc<WgpuAtlas>>>,
     foreground_executor: ForegroundExecutor,
@@ -82,6 +84,8 @@ pub(crate) struct OhosWindow {
     active_touches: RefCell<HashMap<i32, TouchId>>,
     touch_tap_candidates: RefCell<HashMap<i32, TouchTapCandidate>>,
     next_touch_id: Cell<u64>,
+    touch_scroll: Rc<RefCell<TouchScroll>>,
+    long_press_timer: RefCell<Option<(TouchId, Task<()>)>>,
 }
 
 /// GPUI invalidation requests a system VSync. The native callback only records
@@ -91,6 +95,7 @@ struct FrameScheduler {
     pending: Arc<AtomicBool>,
     requested: Arc<AtomicBool>,
     active: AtomicBool,
+    failed: AtomicBool,
     waker: OpenHarmonyWaker,
 }
 
@@ -101,12 +106,16 @@ impl FrameScheduler {
             pending: Arc::new(AtomicBool::new(false)),
             requested: Arc::new(AtomicBool::new(false)),
             active: AtomicBool::new(true),
+            failed: AtomicBool::new(false),
             waker,
         }))
     }
 
     fn request_frame(&self) {
-        if !self.active.load(Ordering::Acquire) || self.requested.swap(true, Ordering::AcqRel) {
+        if !self.active.load(Ordering::Acquire)
+            || self.failed.load(Ordering::Acquire)
+            || self.requested.swap(true, Ordering::AcqRel)
+        {
             return;
         }
         let pending = self.pending.clone();
@@ -119,12 +128,26 @@ impl FrameScheduler {
         });
         if result != 0 {
             self.requested.store(false, Ordering::Release);
+            // Keep XComponent's native frame callback as a fallback if the
+            // demand-driven VSync source becomes unavailable.
+            self.failed.store(true, Ordering::Release);
             warn!("Failed to request OHOS VSync frame: {result}");
         }
     }
 
     fn take_pending(&self) -> bool {
         self.pending.swap(false, Ordering::AcqRel)
+    }
+
+    fn set_active(&self, active: bool) {
+        self.active.store(active, Ordering::Release);
+        if !active {
+            self.pending.store(false, Ordering::Release);
+            // A callback posted before backgrounding may never arrive.
+            self.requested.store(false, Ordering::Release);
+        } else {
+            self.request_frame();
+        }
     }
 }
 
@@ -357,6 +380,7 @@ impl OhosWindow {
                 hit_test_window_control: None,
             })),
             renderer: RefCell::new(None),
+            surface_available: Cell::new(false),
             gpu_context,
             fallback_atlas: RefCell::new(fallback_atlas),
             foreground_executor,
@@ -373,6 +397,8 @@ impl OhosWindow {
             active_touches: RefCell::new(HashMap::new()),
             touch_tap_candidates: RefCell::new(HashMap::new()),
             next_touch_id: Cell::new(0),
+            touch_scroll: Rc::new(RefCell::new(TouchScroll::default())),
+            long_press_timer: RefCell::new(None),
         })
     }
 
@@ -386,6 +412,8 @@ impl OhosWindow {
 
     pub(crate) fn take_pending_frame(&self) -> bool {
         !self.closed.get()
+            && self.surface_available.get()
+            && self.visibility.get() == WindowVisibility::Visible
             && self
                 .frame_scheduler
                 .as_ref()
@@ -398,8 +426,15 @@ impl OhosWindow {
     }
 
     pub(crate) fn draw_requested_frame(&self) {
-        if self.closed.get() {
+        if self.closed.get()
+            || !self.surface_available.get()
+            || self.visibility.get() != WindowVisibility::Visible
+        {
             return;
+        }
+        let momentum_input = self.touch_scroll.borrow_mut().tick(Instant::now());
+        if let Some(input) = momentum_input {
+            self.dispatch_input(input);
         }
         let mut callback = self.callbacks.borrow_mut().request_frame.take();
         if let Some(ref mut callback) = callback {
@@ -409,6 +444,7 @@ impl OhosWindow {
             });
         }
         self.callbacks.borrow_mut().request_frame = callback;
+        self.request_touch_momentum_frame();
     }
 
     pub(crate) fn apply_window_status(&self, status: i32) {
@@ -510,17 +546,23 @@ impl OhosWindow {
             }
             TouchPhase::Started => false,
         };
-        self.dispatch_input(PlatformInput::Touch(TouchEvent {
-            id,
-            phase,
-            position,
-            predicted_position: None,
-            force: force.is_finite().then(|| force.clamp(0.0, 1.0)),
-        }));
+        let tap_allowed = self.touch_scroll.borrow_mut().relay(
+            TouchEvent {
+                id,
+                phase,
+                position,
+                predicted_position: None,
+                force: force.is_finite().then(|| force.clamp(0.0, 1.0)),
+            },
+            Instant::now(),
+            |input| self.dispatch_input(input),
+        );
+        self.update_touch_long_press_timer();
+        self.request_touch_momentum_frame();
         if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
             self.active_touches.borrow_mut().remove(&raw_id);
         }
-        if should_reopen_keyboard {
+        if should_reopen_keyboard && tap_allowed {
             // Focusing an already-focused GPUI input is otherwise a no-op.
             // OHOS can dismiss its IME without changing that focus, so an
             // editable tap must always be treated as a fresh show request.
@@ -529,6 +571,51 @@ impl OhosWindow {
             // from stealing focus.
             self.request_keyboard();
         }
+    }
+
+    fn request_touch_momentum_frame(&self) {
+        if self.touch_scroll.borrow().has_momentum() {
+            if let Some(scheduler) = &self.frame_scheduler {
+                scheduler.request_frame();
+            }
+        }
+    }
+
+    fn update_touch_long_press_timer(&self) {
+        let pending = self
+            .touch_scroll
+            .borrow()
+            .pending_long_press(Instant::now());
+        let Some((id, delay)) = pending else {
+            self.long_press_timer.borrow_mut().take();
+            return;
+        };
+        if self
+            .long_press_timer
+            .borrow()
+            .as_ref()
+            .is_some_and(|(scheduled, _)| *scheduled == id)
+        {
+            return;
+        }
+        let touch_scroll = self.touch_scroll.clone();
+        let callbacks = self.callbacks.clone();
+        let task = self.foreground_executor.spawn(async move {
+            smol::Timer::after(delay).await;
+            touch_scroll.borrow_mut().offer_long_press(id, |input| {
+                Self::dispatch_input_with_callbacks(&callbacks, input)
+            });
+        });
+        *self.long_press_timer.borrow_mut() = Some((id, task));
+    }
+
+    fn cancel_touch_input(&self) {
+        self.long_press_timer.borrow_mut().take();
+        self.touch_scroll
+            .borrow_mut()
+            .cancel(|input| self.dispatch_input(input));
+        self.active_touches.borrow_mut().clear();
+        self.touch_tap_candidates.borrow_mut().clear();
     }
 
     fn touch_moved_beyond_tap_slop(&self, raw_id: i32, position: Point<Pixels>) -> bool {
@@ -739,6 +826,12 @@ impl OhosWindow {
         let layout_bottom_screen = layout_top_screen.saturating_add(layout_height);
 
         let keyboard_avoid_visible = keyboard_area.map(|a| a.visible).unwrap_or(false);
+        // A show request does not prove that an on-screen keyboard occupies
+        // the window. Without keyboard geometry, system/navigation bars are
+        // only safe-area insets; counting them here shrinks the viewport twice.
+        if !keyboard_area.is_some_and(|area| area.bottom_rect.height > 0) {
+            return Some(0);
+        }
         if !(self.keyboard_visible.get() || keyboard_avoid_visible) {
             return Some(0);
         }
@@ -877,6 +970,12 @@ impl OhosWindow {
     }
 
     fn update_visibility(&self, next: WindowVisibility) {
+        if next != WindowVisibility::Visible {
+            self.cancel_touch_input();
+        }
+        if let Some(scheduler) = &self.frame_scheduler {
+            scheduler.set_active(next == WindowVisibility::Visible && self.surface_available.get());
+        }
         if self.visibility.replace(next) == next {
             return;
         }
@@ -1078,6 +1177,10 @@ impl OhosWindow {
     pub(crate) fn handle_event(&self, event: &Event) {
         match event {
             Event::SurfaceCreate => {
+                self.surface_available.set(true);
+                if let Some(scheduler) = &self.frame_scheduler {
+                    scheduler.set_active(self.visibility.get() == WindowVisibility::Visible);
+                }
                 debug!("OhosWindow: SurfaceCreate event received - initializing renderer");
                 self.initialize_accessibility();
                 // Initialize renderer when SurfaceCreate event is received
@@ -1100,6 +1203,11 @@ impl OhosWindow {
                 self.refresh_insets();
             }
             Event::SurfaceDestroy => {
+                self.cancel_touch_input();
+                self.surface_available.set(false);
+                if let Some(scheduler) = &self.frame_scheduler {
+                    scheduler.set_active(false);
+                }
                 self.release_accessibility();
                 self.renderer.borrow_mut().take();
                 self.set_hovered(false);
@@ -1198,7 +1306,16 @@ impl OhosWindow {
             Event::Start => self.update_visibility(WindowVisibility::Visible),
             Event::Stop => self.update_visibility(WindowVisibility::Hidden),
             Event::WindowRedraw(_) => {
-                self.draw_requested_frame();
+                // The platform event loop already drains pending GPUI VSync
+                // frames. Drawing again for XComponent's continuous callback
+                // can advance momentum and submit a second frame in one VSync.
+                if self
+                    .frame_scheduler
+                    .as_ref()
+                    .is_none_or(|scheduler| scheduler.failed.load(Ordering::Acquire))
+                {
+                    self.draw_requested_frame();
+                }
             }
             Event::Input(input_event) => {
                 self.handle_input_event(input_event);
@@ -1446,6 +1563,39 @@ impl OhosWindow {
                     self.dispatch_scroll(position, delta, touch_phase);
                 }
             }
+            InputEvent::ArkUi(ArkUiInputEvent::Gesture(
+                openharmony_ability::GestureEvent::Pan(pan),
+            )) => {
+                let phase = match pan.phase {
+                    openharmony_ability::GesturePhase::Start => TouchPhase::Started,
+                    openharmony_ability::GesturePhase::Update => TouchPhase::Moved,
+                    openharmony_ability::GesturePhase::End => TouchPhase::Ended,
+                    openharmony_ability::GesturePhase::Cancel => TouchPhase::Cancelled,
+                };
+                let id = pan
+                    .pointer
+                    .pointer_id
+                    .and_then(|id| self.active_touches.borrow().get(&id).copied());
+                let delta = self.point_from_device_pixels(pan.delta_x, pan.delta_y);
+                let velocity = self
+                    .point_from_device_pixels(pan.velocity_x, pan.velocity_y)
+                    .map(f32::from);
+                self.touch_scroll.borrow_mut().native_pan(
+                    NativePanInput {
+                        id,
+                        phase,
+                        delta,
+                        velocity,
+                    },
+                    Instant::now(),
+                    |input| self.dispatch_input(input),
+                );
+                self.update_touch_long_press_timer();
+                self.request_touch_momentum_frame();
+            }
+            // Raw contacts retain click/long-press and control capture support.
+            // Pan End already contains ArkUI's velocity; Swipe must not launch
+            // a second momentum curve for the same contact.
             InputEvent::ArkUi(ArkUiInputEvent::Gesture(_)) => {}
             InputEvent::XComponent(XComponentInputEvent::Touch(touch_event)) => {
                 self.dispatch_raw_touch_event(touch_event);
@@ -2034,6 +2184,12 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn draw(&self, scene: &Scene) {
+        if self.closed.get()
+            || !self.surface_available.get()
+            || self.visibility.get() != WindowVisibility::Visible
+        {
+            return;
+        }
         // Initialize renderer lazily if not already initialized
         // This ensures native_window is available (after SurfaceCreate event)
         if self.renderer.borrow().is_none() {
