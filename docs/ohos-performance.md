@@ -37,9 +37,11 @@ unchanged at `f45c7c22d0`.
 - Capture copies and converts one row at a time instead of zeroing and rescanning
   a complete frame. RGBA, RGBX, BGRA and BGRX retain their channel/alpha semantics.
 
-Ability branch `feat/pr82-nearsend-integration` at `4493821e` supplies frame
+Ability branch `feat/pr82-nearsend-integration` at `ab1d6c20` supplies frame
 delivery selection and releases native consumers before dropping their ArkUI
 root. The earlier reverse order caused a reproduced multiwindow close crash.
+The SDK contains only OHOS implementations; target-platform fallback branches
+were removed without changing the native frame callback body or device classes.
 
 ## Verification
 
