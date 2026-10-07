@@ -1,5 +1,7 @@
 # 适配层审计修复与验证（2026-10-07）
 
+续验：短停留复现结论、系统帧调度修复及 Clippy 清理见[本轮报告](system-frame-followup-2026-10-07.md)。以下保留上一轮记录。
+
 对应 [修复前审计](audit-2026-10-07.md)。修改限于 gpui-ohos、openharmony-ability 与 NearSend 的依赖接入；GPUI 核心及 NearSend 业务源码未改。
 
 ## 实现
