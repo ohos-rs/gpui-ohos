@@ -1,0 +1,8 @@
+{
+  "string": [
+    {
+      "name": "clipboard_permission_reason",
+      "value": "用于验证文本、图片和文件的剪贴板读取与粘贴功能"
+    }
+  ]
+}

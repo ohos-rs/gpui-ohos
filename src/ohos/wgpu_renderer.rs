@@ -64,7 +64,15 @@ pub struct WgpuSurfaceConfig {
     pub transparent: bool,
 }
 
-struct WgpuPipelines {
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct PipelineKey {
+    surface_format: wgpu::TextureFormat,
+    alpha_mode: wgpu::CompositeAlphaMode,
+    path_sample_count: u32,
+    dual_source_blending: bool,
+}
+
+pub(super) struct WgpuPipelines {
     quads: wgpu::RenderPipeline,
     shadows: wgpu::RenderPipeline,
     path_rasterization: wgpu::RenderPipeline,
@@ -75,7 +83,8 @@ struct WgpuPipelines {
     poly_sprites: wgpu::RenderPipeline,
 }
 
-struct WgpuBindGroupLayouts {
+#[derive(Clone)]
+pub(super) struct WgpuBindGroupLayouts {
     globals: wgpu::BindGroupLayout,
     textures: wgpu::BindGroupLayout,
 }
@@ -100,7 +109,7 @@ pub struct WgpuRenderer {
     queue: Arc<wgpu::Queue>,
     surface: wgpu::Surface<'static>,
     surface_config: wgpu::SurfaceConfiguration,
-    pipelines: WgpuPipelines,
+    pipelines: Arc<WgpuPipelines>,
     bind_group_layouts: WgpuBindGroupLayouts,
     atlas: Arc<WgpuAtlas>,
     atlas_sampler: wgpu::Sampler,
@@ -133,6 +142,7 @@ impl WgpuRenderer {
         context: &WgpuContext,
         window: &W,
         config: WgpuSurfaceConfig,
+        existing_atlas: Option<Arc<WgpuAtlas>>,
     ) -> anyhow::Result<Self> {
         let window_handle = window
             .window_handle()
@@ -230,28 +240,52 @@ impl WgpuRenderer {
         let dual_source_blending = context.supports_dual_source_blending();
 
         let rendering_params = RenderingParameters::new(&context.adapter, surface_format);
-        let bind_group_layouts = Self::create_bind_group_layouts(&device);
-        let pipelines = Self::create_pipelines(
-            &device,
-            &bind_group_layouts,
+        let bind_group_layouts = context
+            .render_layouts
+            .get_or_init(|| Self::create_bind_group_layouts(&device))
+            .clone();
+        let key = PipelineKey {
             surface_format,
             alpha_mode,
-            rendering_params.path_sample_count,
+            path_sample_count: rendering_params.path_sample_count,
             dual_source_blending,
-        );
-
-        let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("atlas_sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
+        };
+        let shader = context.render_shader.get_or_init(|| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("gpui_shaders"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("shaders.wgsl").into()),
+            })
         });
-        let atlas = Arc::new(WgpuAtlas::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            bind_group_layouts.textures.clone(),
-            atlas_sampler.clone(),
-        ));
+        let pipelines = context.render_pipelines.get_or_insert_with(key, || {
+            Self::create_pipelines(
+                &device,
+                shader,
+                &bind_group_layouts,
+                surface_format,
+                alpha_mode,
+                rendering_params.path_sample_count,
+                dual_source_blending,
+            )
+        });
+
+        let (atlas, atlas_sampler) = if let Some(atlas) = existing_atlas {
+            let (_, sampler) = atlas.render_resources();
+            (atlas, sampler)
+        } else {
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("atlas_sampler"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+            let atlas = Arc::new(WgpuAtlas::new(
+                Arc::clone(&device),
+                Arc::clone(&queue),
+                bind_group_layouts.textures.clone(),
+                sampler.clone(),
+            ));
+            (atlas, sampler)
+        };
 
         let uniform_alignment = device.limits().min_uniform_buffer_offset_alignment as u64;
         let globals_size = std::mem::size_of::<GlobalParams>() as u64;
@@ -879,18 +913,13 @@ impl WgpuRenderer {
 
     fn create_pipelines(
         device: &wgpu::Device,
+        shader_module: &wgpu::ShaderModule,
         layouts: &WgpuBindGroupLayouts,
         surface_format: wgpu::TextureFormat,
         alpha_mode: wgpu::CompositeAlphaMode,
         path_sample_count: u32,
         dual_source_blending: bool,
     ) -> WgpuPipelines {
-        let shader_source = include_str!("shaders.wgsl");
-        let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("gpui_shaders"),
-            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
-        });
-
         let blend_mode = match alpha_mode {
             wgpu::CompositeAlphaMode::PreMultiplied => {
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING
@@ -928,13 +957,13 @@ impl WgpuRenderer {
                 label: Some(name),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
-                    module: &shader_module,
+                    module: shader_module,
                     entry_point: Some(vs_entry),
                     buffers: &vertex_buffers,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &shader_module,
+                    module: shader_module,
                     entry_point: Some(fs_entry),
                     targets: color_targets,
                     compilation_options: wgpu::PipelineCompilationOptions::default(),

@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result};
 use cosmic_text::{
     Attrs, AttrsList, CacheKey, Family, Font as CosmicTextFont, FontFeatures as CosmicFontFeatures,
-    FontSystem, ShapeBuffer, ShapeLine, SwashCache,
+    FontSystem, ShapeBuffer, ShapeLine, SwashCache, SwashContent,
 };
 use gpui::{
     Bounds, DevicePixels, Font, FontFeatures, FontId, FontMetrics, FontRun, FontStyle, FontWeight,
@@ -55,7 +55,7 @@ struct LoadedFont {
     font: Arc<CosmicTextFont>,
     font_weight: cosmic_text::Weight,
     features: CosmicFontFeatures,
-    is_known_emoji_font: bool,
+    has_color_glyphs: bool,
 }
 
 impl OhosTextSystem {
@@ -135,13 +135,8 @@ impl PlatformTextSystem for OhosTextSystem {
         let index = if candidate_properties.is_empty() {
             0
         } else {
-            match font_kit::matching::find_best_match(
-                &candidate_properties,
-                &font_into_properties(font),
-            ) {
-                Ok(index) => index,
-                Err(_) => 0,
-            }
+            font_kit::matching::find_best_match(&candidate_properties, &font_into_properties(font))
+                .unwrap_or_default()
         };
 
         Ok(candidates[index])
@@ -222,8 +217,7 @@ impl OhosTextSystemState {
     fn normalize_family_name(name: &str) -> String {
         name.trim()
             .to_lowercase()
-            .replace('_', " ")
-            .replace('-', " ")
+            .replace(['_', '-'], " ")
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
@@ -348,7 +342,7 @@ impl OhosTextSystemState {
         }
 
         let mut loaded_font_ids = SmallVec::new();
-        for (font_id, postscript_name) in families {
+        for (font_id, _postscript_name) in families {
             let font_weight = self
                 .font_system
                 .db()
@@ -363,10 +357,10 @@ impl OhosTextSystemState {
             let font_id = FontId(self.loaded_fonts.len());
             loaded_font_ids.push(font_id);
             self.loaded_fonts.push(LoadedFont {
+                has_color_glyphs: has_color_glyphs(&font),
                 font,
                 font_weight,
                 features: cosmic_font_features_from(features)?,
-                is_known_emoji_font: check_is_known_emoji_font(&postscript_name),
             });
         }
 
@@ -453,7 +447,7 @@ impl OhosTextSystemState {
             .with_context(|| format!("no image for {params:?} in font {font:?}"))?;
 
         if params.is_emoji {
-            for pixel in image.data.chunks_exact_mut(4) {
+            for pixel in image.data.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
             }
         }
@@ -488,10 +482,10 @@ impl OhosTextSystemState {
 
             let font_id = FontId(self.loaded_fonts.len());
             self.loaded_fonts.push(LoadedFont {
+                has_color_glyphs: has_color_glyphs(&font),
                 font,
                 font_weight: face.weight,
                 features: CosmicFontFeatures::new(),
-                is_known_emoji_font: check_is_known_emoji_font(&face.post_script_name),
             });
 
             font_id
@@ -554,11 +548,27 @@ impl OhosTextSystemState {
                 font_id = self.font_id_for_cosmic_id(glyph.font_id);
                 loaded_font = self.loaded_font(font_id);
             }
-            let is_emoji = loaded_font.is_known_emoji_font;
-
-            if glyph.glyph_id == 3 && is_emoji {
-                continue;
-            }
+            // GPUI's `is_emoji` selects the RGBA atlas. Font names are not a
+            // reliable format test (HarmonyOS uses other color emoji fonts).
+            // Mixed fonts can also have ordinary mask glyphs, so inspect the
+            // cached raster content only for fonts containing color tables.
+            let color_key = loaded_font.has_color_glyphs.then(|| {
+                CacheKey::new(
+                    loaded_font.font.id(),
+                    glyph.glyph_id,
+                    font_size.into(),
+                    (0.0, 0.0),
+                    loaded_font.font_weight,
+                    cosmic_text::CacheKeyFlags::empty(),
+                )
+                .0
+            });
+            let is_emoji = color_key.is_some_and(|key| {
+                self.swash_cache
+                    .get_image(&mut self.font_system, key)
+                    .as_ref()
+                    .is_some_and(|image| image.content == SwashContent::Color)
+            });
 
             let shaped_glyph = ShapedGlyph {
                 id: GlyphId(glyph.glyph_id as u32),
@@ -642,6 +652,9 @@ fn face_info_into_properties(
     }
 }
 
-fn check_is_known_emoji_font(postscript_name: &str) -> bool {
-    postscript_name == "NotoColorEmoji"
+fn has_color_glyphs(font: &CosmicTextFont) -> bool {
+    let font = font.as_swash();
+    [*b"COLR", *b"CBDT", *b"sbix"]
+        .into_iter()
+        .any(|tag| font.table(u32::from_be_bytes(tag)).is_some())
 }

@@ -6,17 +6,22 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [lib]
-name = "gpui_ohos_example"
+name = "gpui_demo"
 crate-type = ["cdylib"]
 doctest = false
 test = false
 
 [dependencies]
+anyhow = "1"
+gpui = { git = "https://github.com/ohos-rs/zed", rev = "f45c7c22d0", default-features = false }
 gpui-ohos = { path = "..", default-features = false }
+log = "0.4"
+ohos-hilog-binding = { version = "*", features = ["log"] }
 napi-derive-ohos = "=1.2.0"
 napi-ohos = "=1.2.0"
-openharmony-ability = "1.0.0-beta.2"
-openharmony-ability-derive = "1.0.0-beta.1"
+openharmony-ability = { path = "ohos/vendor/openharmony-ability/crates/ability" }
+openharmony-ability-derive = { path = "ohos/vendor/openharmony-ability/crates/derive" }
+openharmony-ability-plugin-permission = { path = "ohos/vendor/openharmony-ability/crates/plugin-permission" }
 
 [features]
 default = ["gles"]
@@ -28,3 +33,13 @@ napi-build-ohos = "=1.2.0"
 
 [workspace]
 resolver = "2"
+exclude = ["ohos/vendor/openharmony-ability", "ohos/vendor/openharmony-ability/crates/*"]
+
+[patch.crates-io]
+ohos-ime-binding = { path = "../../../ohos-rs/ohos-native-bindings/crates/ime" }
+ohos-accessibility-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
+ohos-accessibility-sys = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
+ohos-xcomponent-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
+ohos-xcomponent-sys = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
+ohos-arkui-input-sys = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
+ohos-arkui-input-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }

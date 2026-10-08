@@ -1,12 +1,25 @@
+mod capture_pixels;
+mod clipboard;
+mod credentials;
 mod dispatcher;
 mod display;
+mod frame_request;
 mod keyboard;
 mod platform;
+mod render_cache;
+mod screen_capture;
+mod task_queue;
 mod text_system;
+mod touch_scroll;
+mod viewport;
 mod wgpu_atlas;
 mod wgpu_context;
 mod wgpu_renderer;
 mod window;
+mod window_manipulation;
+mod window_state;
+mod worker_state;
+mod workers;
 
 use openharmony_ability::OpenHarmonyApp;
 
