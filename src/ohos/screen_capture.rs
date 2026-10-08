@@ -5,7 +5,7 @@ use std::{
     rc::Rc,
     sync::{
         Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -157,20 +157,30 @@ unsafe extern "C" {
 
 struct CaptureCallbacks {
     frame: Mutex<Box<dyn Fn(ScreenCaptureFrame) + Send>>,
+    failed: AtomicBool,
+}
+
+pub(super) struct DisplayCaptureSource {
+    pub display_id: u64,
+    pub width: i32,
+    pub height: i32,
+    pub is_main: bool,
 }
 
 struct OhosScreenCaptureSource {
-    width: i32,
-    height: i32,
+    target: DisplayCaptureSource,
 }
 
 impl OhosScreenCaptureSource {
     fn metadata(&self) -> SourceMetadata {
         SourceMetadata {
-            id: 0,
-            label: Some("OpenHarmony display".into()),
-            is_main: Some(true),
-            resolution: size(DevicePixels(self.width), DevicePixels(self.height)),
+            id: self.target.display_id,
+            label: Some(format!("OpenHarmony display {}", self.target.display_id).into()),
+            is_main: Some(self.target.is_main),
+            resolution: size(
+                DevicePixels(self.target.width),
+                DevicePixels(self.target.height),
+            ),
         }
     }
 }
@@ -186,8 +196,9 @@ impl ScreenCaptureSource for OhosScreenCaptureSource {
         frame_callback: Box<dyn Fn(ScreenCaptureFrame) + Send>,
     ) -> oneshot::Receiver<Result<Box<dyn ScreenCaptureStream>>> {
         let (sender, receiver) = oneshot::channel();
-        let stream = OhosScreenCaptureStream::start(self.metadata(), frame_callback)
-            .map(|stream| Box::new(stream) as Box<dyn ScreenCaptureStream>);
+        let stream =
+            OhosScreenCaptureStream::start(self.metadata(), self.target.display_id, frame_callback)
+                .map(|stream| Box::new(stream) as Box<dyn ScreenCaptureStream>);
         if sender.send(stream).is_err() {
             warn!("OHOS screen capture receiver was dropped before the stream started");
         }
@@ -196,16 +207,18 @@ impl ScreenCaptureSource for OhosScreenCaptureSource {
 }
 
 pub(super) fn sources(
-    width: i32,
-    height: i32,
+    displays: Vec<DisplayCaptureSource>,
 ) -> oneshot::Receiver<Result<Vec<Rc<dyn ScreenCaptureSource>>>> {
     let (sender, receiver) = oneshot::channel();
-    let result = if width > 0 && height > 0 {
-        Ok(vec![
-            Rc::new(OhosScreenCaptureSource { width, height }) as Rc<dyn ScreenCaptureSource>
-        ])
-    } else {
+    let sources = displays
+        .into_iter()
+        .filter(|display| display.width > 0 && display.height > 0)
+        .map(|target| Rc::new(OhosScreenCaptureSource { target }) as Rc<dyn ScreenCaptureSource>)
+        .collect::<Vec<_>>();
+    let result = if sources.is_empty() {
         Err(anyhow::anyhow!("OHOS display size is unavailable"))
+    } else {
+        Ok(sources)
     };
     if sender.send(result).is_err() {
         warn!("OHOS screen capture source receiver was dropped");
@@ -223,12 +236,14 @@ struct OhosScreenCaptureStream {
 impl OhosScreenCaptureStream {
     fn start(
         metadata: SourceMetadata,
+        display_id: u64,
         frame_callback: Box<dyn Fn(ScreenCaptureFrame) + Send>,
     ) -> Result<Self> {
         let capture = unsafe { OH_AVScreenCapture_Create() };
         ensure!(!capture.is_null(), "OHOS AVScreenCapture is unavailable");
         let callbacks = Box::into_raw(Box::new(CaptureCallbacks {
             frame: Mutex::new(frame_callback),
+            failed: AtomicBool::new(false),
         }));
         let mut stream = Self {
             capture,
@@ -237,9 +252,14 @@ impl OhosScreenCaptureStream {
             started: false,
         };
         let resolution = stream.metadata.resolution;
+        let capture_mode = if stream.metadata.is_main == Some(true) {
+            0 // OH_CAPTURE_HOME_SCREEN targets the primary display.
+        } else {
+            1 // OH_CAPTURE_SPECIFIED_SCREEN uses the selected display ID.
+        };
         let config = ScreenCaptureConfig {
-            capture_mode: 0, // OH_CAPTURE_HOME_SCREEN
-            data_type: 0,    // OH_ORIGINAL_STREAM
+            capture_mode,
+            data_type: 0, // OH_ORIGINAL_STREAM
             audio: AudioInfo {
                 microphone: AudioCaptureInfo {
                     sample_rate: 0,
@@ -258,7 +278,7 @@ impl OhosScreenCaptureStream {
             },
             video: VideoInfo {
                 capture: VideoCaptureInfo {
-                    display_id: 0,
+                    display_id,
                     mission_ids: ptr::null_mut(),
                     mission_ids_len: 0,
                     width: resolution.width.0,
@@ -372,6 +392,9 @@ unsafe extern "C" fn on_buffer(
 }
 
 unsafe fn copy_frame(buffer: *mut AvBuffer, callbacks: &CaptureCallbacks) {
+    if callbacks.failed.load(Ordering::Acquire) {
+        return;
+    }
     let native = unsafe { OH_AVBuffer_GetNativeBuffer(buffer) };
     if native.is_null() {
         return;
@@ -442,7 +465,14 @@ unsafe fn copy_frame(buffer: *mut AvBuffer, callbacks: &CaptureCallbacks) {
     };
     if let Some(frame) = RgbaImage::from_raw(config.width as u32, config.height as u32, pixels) {
         match callbacks.frame.lock() {
-            Ok(callback) => callback(ScreenCaptureFrame(frame)),
+            Ok(callback) => {
+                // Catch client panics while the guard remains on this stack so
+                // a single bad frame callback cannot poison subsequent delivery.
+                if catch_unwind(AssertUnwindSafe(|| callback(ScreenCaptureFrame(frame)))).is_err() {
+                    callbacks.failed.store(true, Ordering::Release);
+                    error!("OHOS screen capture client callback panicked; stopping frame delivery");
+                }
+            }
             Err(_) => error!("OHOS screen capture callback lock is poisoned"),
         }
     }

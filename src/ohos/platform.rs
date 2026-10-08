@@ -3,7 +3,7 @@ use log::{debug, warn};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, VecDeque},
-    path::PathBuf,
+    path::{Component, Path, PathBuf},
     rc::{Rc, Weak},
     sync::atomic::{AtomicUsize, Ordering},
     sync::{Arc, Mutex},
@@ -16,30 +16,46 @@ use openharmony_ability::{
     drain_pending_window_closes, drain_pending_window_status,
 };
 use openharmony_ability_plugin_app_control::{
-    AppControlBridgePlugin, TerminateRequest, TerminateResponse,
+    AppControlBridgePlugin, SetColorModeRequest, SetColorModeResponse, TerminateRequest,
+    TerminateResponse,
 };
-use openharmony_ability_plugin_clipboard::{ClipboardBridgePlugin, ClipboardClient};
+use openharmony_ability_plugin_clipboard::ClipboardBridgePlugin;
 use openharmony_ability_plugin_files::{
     FileDialogOptions, FilesBridgePlugin, FilesExt as _, dialog_type,
 };
-use openharmony_ability_plugin_menu::{
+use openharmony_ability_plugin_menu as menu_plugin;
+
+use menu_plugin::{
     MenuBridgePlugin, MenuClient, MenuItemData, MenuSetMenubarRequest, register_menu_event_sender,
+    register_menu_open_event_sender,
+};
+use openharmony_ability_plugin_notification as notification_plugin;
+
+use notification_plugin::{
+    NotificationAction, NotificationBridgePlugin, NotificationClient, ShowNotificationRequest,
 };
 use openharmony_ability_plugin_process::{ProcessBridgePlugin, ProcessExt as _};
+pub(super) use openharmony_ability_plugin_system_state as system_state_plugin;
+
 use openharmony_ability_plugin_url::{UrlBridgePlugin, UrlExt as _};
 use openharmony_ability_plugin_window::{WindowBridgePlugin, WindowClient};
 use rustc_hash::FxHashMap;
 use sha2::{Digest, Sha256};
 use smallvec::SmallVec;
+use system_state_plugin::{
+    SystemStateBridgePlugin, SystemStateChangedEvent, SystemStateClient,
+    register_system_state_event_sender,
+};
+use url::Url;
 
 use crate::{
-    Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, ClipboardEntry,
-    ClipboardItem, ClipboardReadError, CursorStyle, ExternalPaths, ForegroundExecutor,
-    GestureKinds, GestureTuning, Image, ImageFormat, Keymap, Menu, MenuItem, OwnedMenu,
-    OwnedMenuItem, PathPromptOptions, Platform, PlatformDisplay, PlatformGestures,
-    PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem, PlatformWindow,
-    PriorityQueueReceiver, Result as GpuiResult, RunnableVariant, ScrollPhysics, Task,
-    ThermalState, WindowAppearance, WindowParams,
+    Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, ClipboardItem,
+    ClipboardReadError, CursorStyle, ForegroundExecutor, GestureKinds, GestureTuning, Keymap, Menu,
+    MenuItem, OwnedMenu, OwnedMenuItem, PathPromptOptions, Platform, PlatformDisplay,
+    PlatformGestures, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
+    PlatformWindow, PriorityQueueReceiver, Result as GpuiResult, RunnableVariant, ScrollPhysics,
+    SystemNotification, SystemNotificationResponse, Task, ThermalState, WindowAppearance,
+    WindowParams, WindowVisibility,
 };
 
 use super::{
@@ -53,7 +69,10 @@ use super::{
 
 type OpenUrlsCallback = Rc<RefCell<Option<Box<dyn FnMut(Vec<String>)>>>>;
 type LifecycleCallback = Rc<RefCell<Option<Box<dyn FnMut(AppLifecyclePhase)>>>>;
-type MemoryWarningCallback = Rc<RefCell<Option<Box<dyn FnMut()>>>>;
+type PlatformEventCallback = Rc<RefCell<Option<Box<dyn FnMut()>>>>;
+type NotificationResponseCallback = Rc<RefCell<Option<Box<dyn FnMut(SystemNotificationResponse)>>>>;
+type QuitCallback = Rc<RefCell<Option<Box<dyn FnMut() -> bool>>>>;
+type MenuValidationCallback = Box<dyn FnMut(&dyn Action) -> bool>;
 type MenuActionCallback = Box<dyn FnMut(&dyn Action)>;
 
 pub(crate) struct OhosPlatform {
@@ -63,19 +82,42 @@ pub(crate) struct OhosPlatform {
     foreground_executor: ForegroundExecutor,
     text_system: Arc<dyn PlatformTextSystem>,
     primary_display: Rc<RefCell<Option<OhosDisplay>>>,
+    other_displays: Rc<RefCell<Vec<OhosDisplay>>>,
     main_receiver: Rc<RefCell<PriorityQueueReceiver<RunnableVariant>>>,
     gpu_context: Arc<WgpuContext>,
     windows: Rc<RefCell<Vec<Weak<RefCell<OhosWindow>>>>>,
     window_index: Rc<RefCell<FxHashMap<i64, Weak<RefCell<OhosWindow>>>>>,
     open_urls: OpenUrlsCallback,
+    notification_response: NotificationResponseCallback,
+    notification_responses: Rc<RefCell<VecDeque<SystemNotificationResponse>>>,
     app_lifecycle: LifecycleCallback,
-    memory_warning: MemoryWarningCallback,
-    clipboard_cache: Rc<RefCell<Option<ClipboardItem>>>,
+    on_quit: QuitCallback,
+    quit_started: Rc<Cell<bool>>,
+    on_reopen: PlatformEventCallback,
+    was_hidden: Rc<Cell<bool>>,
+    hidden_window_ids: Rc<RefCell<Option<Vec<i64>>>>,
+    focus_before_hide: Rc<Cell<Option<i64>>>,
+    memory_warning: PlatformEventCallback,
+    system_sleep: PlatformEventCallback,
+    system_wake: PlatformEventCallback,
+    sleeping: Rc<Cell<bool>>,
+    thermal_state: Rc<Cell<ThermalState>>,
+    thermal_state_change: PlatformEventCallback,
+    system_state_events: Arc<Mutex<VecDeque<SystemStateChangedEvent>>>,
+    bundle_code_dir: Arc<Mutex<Option<PathBuf>>>,
+    window_stack_state: Rc<RefCell<Option<Vec<i64>>>>,
+    window_stack_pending: Rc<Cell<bool>>,
+    window_stack_generation: Rc<Cell<u64>>,
+    keyboard_layout_change: PlatformEventCallback,
+    keyboard_language: Rc<RefCell<Option<String>>>,
+    appearance_override: Rc<Cell<Option<WindowAppearance>>>,
+    clipboard: super::clipboard::OhosClipboard,
     cursor_hidden_until_move: Rc<Cell<bool>>,
     cursor_window_id: Rc<Cell<i64>>,
     idle_sleep_guards: Arc<AtomicUsize>,
     menus: Rc<RefCell<MenuState>>,
     menu_events: Arc<Mutex<VecDeque<String>>>,
+    menu_open_events: Arc<AtomicUsize>,
 }
 
 #[derive(Default)]
@@ -85,6 +127,24 @@ struct MenuState {
     actions: HashMap<String, Box<dyn Action>>,
     next_id: u64,
     on_action: Option<MenuActionCallback>,
+    on_will_open: Option<Box<dyn FnMut()>>,
+    on_validate: Option<MenuValidationCallback>,
+}
+
+fn apply_menu_validation(items: &mut [MenuItemData], enabled: &HashMap<String, bool>) -> bool {
+    let mut changed = false;
+    for item in items {
+        if let Some(value) = enabled.get(&item.id)
+            && item.enabled != Some(*value)
+        {
+            item.enabled = Some(*value);
+            changed = true;
+        }
+        if let Some(children) = item.submenu_items.as_mut() {
+            changed |= apply_menu_validation(children, enabled);
+        }
+    }
+    changed
 }
 
 fn menu_items(
@@ -220,6 +280,29 @@ impl OhosPlatform {
                 menu_waker.wake();
             }
         });
+        let menu_open_events = Arc::new(AtomicUsize::new(0));
+        let (menu_open_sender, menu_open_receiver) = crossbeam_channel::unbounded();
+        register_menu_open_event_sender(menu_open_sender);
+        let pending_menu_open_events = menu_open_events.clone();
+        let menu_open_waker = app.create_waker();
+        std::thread::spawn(move || {
+            while menu_open_receiver.recv().is_ok() {
+                pending_menu_open_events.fetch_add(1, Ordering::Release);
+                menu_open_waker.wake();
+            }
+        });
+        let system_state_events = Arc::new(Mutex::new(VecDeque::new()));
+        let bundle_code_dir = Arc::new(Mutex::new(None));
+        let (system_state_sender, system_state_receiver) = crossbeam_channel::unbounded();
+        register_system_state_event_sender(system_state_sender.clone());
+        let pending_system_state_events = system_state_events.clone();
+        let system_state_waker = app.create_waker();
+        std::thread::spawn(move || {
+            while let Ok(event) = system_state_receiver.recv() {
+                pending_system_state_events.lock().unwrap().push_back(event);
+                system_state_waker.wake();
+            }
+        });
 
         // Initialize GPU context for WGPU renderer.
         // Note: ZED_DEVICE_ID environment variable is optional - if not set, device_id defaults to 0
@@ -233,28 +316,109 @@ impl OhosPlatform {
                 )
             })?);
 
+        let app_slot = Rc::new(RefCell::new(None));
+        let clipboard =
+            super::clipboard::OhosClipboard::new(app_slot.clone(), foreground_executor.clone());
         let platform = Self {
-            app: Rc::new(RefCell::new(None)),
+            app: app_slot,
             dispatcher,
             background_executor,
             foreground_executor,
             text_system,
             primary_display: Rc::new(RefCell::new(None)),
+            other_displays: Rc::new(RefCell::new(Vec::new())),
             main_receiver: Rc::new(RefCell::new(main_receiver)),
             gpu_context,
             windows: Rc::new(RefCell::new(Vec::new())),
             window_index: Rc::new(RefCell::new(FxHashMap::default())),
             open_urls: Rc::new(RefCell::new(None)),
+            notification_response: Rc::new(RefCell::new(None)),
+            notification_responses: Rc::new(RefCell::new(VecDeque::new())),
             app_lifecycle: Rc::new(RefCell::new(None)),
+            on_quit: Rc::new(RefCell::new(None)),
+            quit_started: Rc::new(Cell::new(false)),
+            on_reopen: Rc::new(RefCell::new(None)),
+            was_hidden: Rc::new(Cell::new(false)),
+            hidden_window_ids: Rc::new(RefCell::new(None)),
+            focus_before_hide: Rc::new(Cell::new(None)),
             memory_warning: Rc::new(RefCell::new(None)),
-            clipboard_cache: Rc::new(RefCell::new(None)),
+            system_sleep: Rc::new(RefCell::new(None)),
+            system_wake: Rc::new(RefCell::new(None)),
+            sleeping: Rc::new(Cell::new(false)),
+            thermal_state: Rc::new(Cell::new(ThermalState::Nominal)),
+            thermal_state_change: Rc::new(RefCell::new(None)),
+            system_state_events,
+            bundle_code_dir: bundle_code_dir.clone(),
+            window_stack_state: Rc::new(RefCell::new(None)),
+            window_stack_pending: Rc::new(Cell::new(false)),
+            window_stack_generation: Rc::new(Cell::new(0)),
+            keyboard_layout_change: Rc::new(RefCell::new(None)),
+            keyboard_language: Rc::new(RefCell::new(None)),
+            appearance_override: Rc::new(Cell::new(None)),
+            clipboard,
             cursor_hidden_until_move: Rc::new(Cell::new(false)),
             cursor_window_id: Rc::new(Cell::new(0)),
             idle_sleep_guards: Arc::new(AtomicUsize::new(0)),
             menus: Rc::new(RefCell::new(MenuState::default())),
             menu_events,
+            menu_open_events,
         };
         platform.set_app(app);
+        if let Some(app) = platform.app.borrow().clone() {
+            platform
+                .background_executor
+                .spawn(async move {
+                    let client = match SystemStateClient::new(&app) {
+                        Ok(client) => client,
+                        Err(error) => {
+                            warn!("Failed to create OHOS system-state client: {error}");
+                            return;
+                        }
+                    };
+                    match client.thermal_level().await {
+                        Ok(level) => {
+                            let _ = system_state_sender.send(SystemStateChangedEvent {
+                                kind: "thermal".into(),
+                                thermal_level: Some(level),
+                                available_area: None,
+                                displays: None,
+                            });
+                        }
+                        Err(error) => warn!("Failed to read OHOS thermal state: {error}"),
+                    }
+                    match client.bundle_code_dir().await {
+                        Ok(path) if Path::new(&path).is_absolute() => {
+                            log::info!("OHOS bundle code directory: {path}");
+                            *bundle_code_dir.lock().unwrap() = Some(PathBuf::from(path));
+                        }
+                        Ok(path) => warn!("OHOS bundle code directory is not absolute: {path}"),
+                        Err(error) => warn!("Failed to read OHOS bundle code directory: {error}"),
+                    }
+                    match client.available_area().await {
+                        Ok(area) => {
+                            let _ = system_state_sender.send(SystemStateChangedEvent {
+                                kind: "available-area".into(),
+                                thermal_level: None,
+                                available_area: Some(area),
+                                displays: None,
+                            });
+                        }
+                        Err(error) => warn!("Failed to read OHOS available area: {error}"),
+                    }
+                    match client.displays().await {
+                        Ok(displays) => {
+                            let _ = system_state_sender.send(SystemStateChangedEvent {
+                                kind: "displays".into(),
+                                thermal_level: None,
+                                available_area: None,
+                                displays: Some(displays),
+                            });
+                        }
+                        Err(error) => warn!("Failed to enumerate OHOS displays: {error}"),
+                    }
+                })
+                .detach();
+        }
         Ok(platform)
     }
 
@@ -290,6 +454,11 @@ impl OhosPlatform {
         if let Err(error) = app.set_touch_input_delivery(TouchInputDelivery::Both) {
             warn!("Failed to configure system pan and raw control input for GPUI: {error}");
         }
+        if let Err(error) =
+            app.set_keyboard_input_delivery(openharmony_ability::KeyboardInputDelivery::ArkUi)
+        {
+            warn!("Using raw OHOS keyboard input: {error}");
+        }
         if let Err(error) = app.register_plugin(AppControlBridgePlugin) {
             warn!("Failed to register OpenHarmony app-control plugin: {error}");
         }
@@ -297,10 +466,12 @@ impl OhosPlatform {
             warn!("Failed to register OpenHarmony URL plugin: {error}");
         }
         for result in [
-            app.register_plugin(ClipboardBridgePlugin),
+            app.register_plugin(ClipboardBridgePlugin::default()),
             app.register_plugin(FilesBridgePlugin),
             app.register_plugin(MenuBridgePlugin),
+            app.register_plugin(NotificationBridgePlugin),
             app.register_plugin(ProcessBridgePlugin),
+            app.register_plugin(SystemStateBridgePlugin),
             app.register_plugin(WindowBridgePlugin),
         ] {
             if let Err(error) = result {
@@ -308,6 +479,7 @@ impl OhosPlatform {
             }
         }
         *self.app.borrow_mut() = Some(app.clone());
+        *self.keyboard_language.borrow_mut() = Some(app.config().language);
         // Initialize primary display when app is set
         *self.primary_display.borrow_mut() = Some(OhosDisplay::new(app.clone()));
         self.dispatcher.set_waker(app.create_waker());
@@ -386,6 +558,392 @@ impl OhosPlatform {
         }
     }
 
+    fn dispatch_menu_open_events(&self) {
+        let count = self.menu_open_events.swap(0, Ordering::AcqRel);
+        for _ in 0..count {
+            log::info!("OHOS app menu opening");
+            let mut on_will_open = self.menus.borrow_mut().on_will_open.take();
+            if let Some(ref mut callback) = on_will_open {
+                callback();
+            }
+            self.menus.borrow_mut().on_will_open = on_will_open;
+
+            let mut on_validate = self.menus.borrow_mut().on_validate.take();
+            let Some(ref mut validate) = on_validate else {
+                self.menus.borrow_mut().on_validate = on_validate;
+                continue;
+            };
+            let actions = self
+                .menus
+                .borrow()
+                .actions
+                .iter()
+                .map(|(id, action)| (id.clone(), action.boxed_clone()))
+                .collect::<Vec<_>>();
+            let enabled = actions
+                .into_iter()
+                .map(|(id, action)| (id, validate(action.as_ref())))
+                .collect::<HashMap<_, _>>();
+            log::info!("OHOS app menu validated {} actions", enabled.len());
+            self.menus.borrow_mut().on_validate = on_validate;
+
+            let json = self.menus.borrow().json.clone();
+            let Ok(mut items) = serde_json::from_str::<Vec<MenuItemData>>(&json) else {
+                continue;
+            };
+            if !apply_menu_validation(&mut items, &enabled) {
+                continue;
+            }
+            match serde_json::to_string(&items) {
+                Ok(json) => self.menus.borrow_mut().json = json,
+                Err(error) => {
+                    warn!("Failed to validate OHOS app menu: {error}");
+                    continue;
+                }
+            }
+            self.publish_menu(0);
+            for window in self.windows.borrow().iter().filter_map(Weak::upgrade) {
+                let id = window.borrow().window_id();
+                if id != 0 {
+                    self.publish_menu(id);
+                }
+            }
+        }
+    }
+
+    fn dispatch_system_state_events(&self) {
+        loop {
+            let event = self.system_state_events.lock().unwrap().pop_front();
+            let Some(event) = event else { break };
+            match event.kind.as_str() {
+                "thermal" => {
+                    let Some(level) = event.thermal_level else {
+                        continue;
+                    };
+                    let state = match level {
+                        0 | 1 => ThermalState::Nominal,
+                        2 => ThermalState::Fair,
+                        3 | 4 => ThermalState::Serious,
+                        _ => ThermalState::Critical,
+                    };
+                    log::info!("OHOS thermal level {level} mapped to {state:?}");
+                    if self.thermal_state.replace(state) != state {
+                        let mut callback = self.thermal_state_change.borrow_mut().take();
+                        if let Some(ref mut callback) = callback {
+                            callback();
+                        }
+                        *self.thermal_state_change.borrow_mut() = callback;
+                    }
+                }
+                "sleep" if !self.sleeping.replace(true) => {
+                    log::info!("OHOS system sleep event");
+                    let mut callback = self.system_sleep.borrow_mut().take();
+                    if let Some(ref mut callback) = callback {
+                        callback();
+                    }
+                    *self.system_sleep.borrow_mut() = callback;
+                }
+                "wake" if self.sleeping.replace(false) => {
+                    log::info!("OHOS system wake event");
+                    let mut callback = self.system_wake.borrow_mut().take();
+                    if let Some(ref mut callback) = callback {
+                        callback();
+                    }
+                    *self.system_wake.borrow_mut() = callback;
+                }
+                "available-area" => {
+                    if let Some(area) = event.available_area
+                        && let Some(display) = self.primary_display.borrow().as_ref()
+                    {
+                        display.set_available_area(area.left, area.top, area.width, area.height);
+                    }
+                }
+                "displays" => {
+                    let Some(displays) = event.displays else {
+                        continue;
+                    };
+                    let Some(app) = self.app.borrow().clone() else {
+                        continue;
+                    };
+                    let default = displays.iter().find(|display| display.is_default).cloned();
+                    if let Some(default) = default
+                        && let Some(primary) = self.primary_display.borrow().as_ref()
+                    {
+                        primary.update_snapshot(default);
+                    }
+                    let mut others = self.other_displays.borrow_mut();
+                    let previous = std::mem::take(&mut *others);
+                    *others = displays
+                        .into_iter()
+                        .filter(|display| {
+                            !display.is_default
+                                && display.id >= 0
+                                && display.width > 0
+                                && display.height > 0
+                                && display.density_pixels.is_finite()
+                                && display.density_pixels > 0.0
+                        })
+                        .map(|snapshot| {
+                            if let Some(existing) =
+                                previous.iter().find(|item| item.id_raw() == snapshot.id)
+                            {
+                                existing.update_snapshot(snapshot);
+                                existing.clone()
+                            } else {
+                                OhosDisplay::from_snapshot(app.clone(), snapshot)
+                            }
+                        })
+                        .collect();
+                    log::info!("OHOS displays enumerated: {}", others.len() + 1);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn queue_notification_uri(&self, uri: &str) -> bool {
+        let Ok(parsed) = Url::parse(uri) else {
+            return false;
+        };
+        if parsed.scheme() != "gpui-notification" || parsed.host_str() != Some("response") {
+            return false;
+        }
+        let mut tag = None;
+        let mut action_id = None;
+        for (key, value) in parsed.query_pairs() {
+            match key.as_ref() {
+                "tag" => tag = Some(value.into_owned()),
+                "action" => action_id = Some(value.into_owned()),
+                _ => {}
+            }
+        }
+        if let Some(tag) = tag {
+            log::info!("OHOS notification activated: tag={tag}, action={action_id:?}");
+            self.notification_responses
+                .borrow_mut()
+                .push_back(SystemNotificationResponse {
+                    tag: tag.into(),
+                    action_id: action_id.map(Into::into),
+                });
+            if let Some(app) = self.app.borrow().as_ref() {
+                app.create_waker().wake();
+            }
+        }
+        true
+    }
+
+    fn dispatch_notification_responses(&self) {
+        while self.notification_response.borrow().is_some() {
+            let Some(response) = self.notification_responses.borrow_mut().pop_front() else {
+                break;
+            };
+            let mut callback = self.notification_response.borrow_mut().take();
+            if let Some(ref mut callback) = callback {
+                callback(response);
+            }
+            *self.notification_response.borrow_mut() = callback;
+        }
+    }
+
+    fn set_ability_visible(&self, visible: bool) {
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        let mut window_ids = if visible {
+            self.hidden_window_ids.borrow().clone().unwrap_or_else(|| {
+                self.windows
+                    .borrow()
+                    .iter()
+                    .filter_map(Weak::upgrade)
+                    .find_map(|window| {
+                        let window = window.borrow();
+                        (window.window_id() == 0 && window.visibility() == WindowVisibility::Hidden)
+                            .then_some(vec![0])
+                    })
+                    .unwrap_or_default()
+            })
+        } else {
+            if self.hidden_window_ids.borrow().is_some() {
+                return;
+            }
+            let windows = self.windows.borrow();
+            let mut visible_windows = Vec::new();
+            for window in windows.iter().filter_map(Weak::upgrade) {
+                let window = window.borrow();
+                if window.visibility() == WindowVisibility::Visible {
+                    if window.is_active() {
+                        self.focus_before_hide.set(Some(window.window_id()));
+                    }
+                    visible_windows.push(window.window_id());
+                }
+            }
+            if visible_windows.is_empty() {
+                self.focus_before_hide.set(None);
+                return;
+            }
+            *self.hidden_window_ids.borrow_mut() = Some(visible_windows.clone());
+            self.was_hidden.set(true);
+            visible_windows
+        };
+        // Hide children before the main window; restore the main window first.
+        if !visible {
+            window_ids.reverse();
+        }
+        let platform = self.clone();
+        self.foreground_executor
+            .spawn(async move {
+                let result = async {
+                    let client = WindowClient::new(&app)?;
+                    let mut failed = Vec::new();
+                    let mut changed = Vec::new();
+                    for id in window_ids {
+                        let operation = if visible {
+                            client.show_window(id).await
+                        } else {
+                            client.minimize_window(id).await
+                        };
+                        if let Err(error) = operation {
+                            warn!("Failed to change OHOS window {id} visibility: {error}");
+                            failed.push(id);
+                        } else {
+                            changed.push(id);
+                        }
+                    }
+                    if visible {
+                        let focus_id = platform
+                            .focus_before_hide
+                            .get()
+                            .filter(|id| changed.contains(id))
+                            .or_else(|| changed.iter().copied().find(|id| *id == 0))
+                            .or_else(|| changed.last().copied());
+                        if let Some(focus_id) = focus_id
+                            && let Err(error) = client.focus_window(focus_id).await
+                        {
+                            warn!("Failed to focus restored OHOS window {focus_id}: {error}");
+                        }
+                        if failed.is_empty() {
+                            platform.focus_before_hide.set(None);
+                        }
+                    }
+                    Ok::<(Vec<i64>, Vec<i64>), anyhow::Error>((failed, changed))
+                }
+                .await;
+                match result {
+                    Ok((failed, restored)) if visible => {
+                        *platform.hidden_window_ids.borrow_mut() =
+                            (!failed.is_empty()).then_some(failed);
+                        if !restored.is_empty() {
+                            platform.dispatch_reopen();
+                        }
+                    }
+                    Ok((failed, hidden)) => {
+                        let any_hidden = !hidden.is_empty();
+                        *platform.hidden_window_ids.borrow_mut() = any_hidden.then_some(hidden);
+                        if !any_hidden {
+                            platform.was_hidden.set(false);
+                            platform.focus_before_hide.set(None);
+                        }
+                        if !failed.is_empty() {
+                            warn!("Failed to hide {} OHOS windows", failed.len());
+                        }
+                    }
+                    Err(error) => {
+                        if !visible {
+                            *platform.hidden_window_ids.borrow_mut() = None;
+                            platform.was_hidden.set(false);
+                            platform.focus_before_hide.set(None);
+                        }
+                        warn!("Failed to change OpenHarmony window visibility: {error}");
+                    }
+                }
+            })
+            .detach();
+    }
+
+    fn invalidate_window_stack(&self) {
+        *self.window_stack_state.borrow_mut() = None;
+        self.window_stack_generation
+            .set(self.window_stack_generation.get().wrapping_add(1));
+        self.refresh_window_stack();
+    }
+
+    fn refresh_window_stack(&self) {
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        if self.window_stack_pending.replace(true) {
+            return;
+        }
+        let generation = self.window_stack_generation.get();
+        let platform = self.clone();
+        self.foreground_executor
+            .spawn(async move {
+                let result = async {
+                    let client = WindowClient::new(&app)?;
+                    let live = platform
+                        .windows
+                        .borrow()
+                        .iter()
+                        .filter_map(Weak::upgrade)
+                        .collect::<Vec<_>>();
+                    let mut groups: Vec<(i64, Vec<i64>)> = Vec::new();
+                    for window in live {
+                        let window = window.borrow();
+                        let Some(display) = window.display() else {
+                            continue;
+                        };
+                        let display_id = i64::try_from(u64::from(display.id()))?;
+                        if let Some((_, ids)) = groups.iter_mut().find(|(id, _)| *id == display_id)
+                        {
+                            ids.push(window.window_id());
+                        } else {
+                            groups.push((display_id, vec![window.window_id()]));
+                        }
+                    }
+                    let mut ids = Vec::new();
+                    for (display, windows) in groups {
+                        ids.extend(client.window_stack(display, windows).await?);
+                    }
+                    Ok::<_, anyhow::Error>(ids)
+                }
+                .await;
+                platform.window_stack_pending.set(false);
+                if generation != platform.window_stack_generation.get() {
+                    platform.refresh_window_stack();
+                    return;
+                }
+                match result {
+                    Ok(ids) => *platform.window_stack_state.borrow_mut() = Some(ids),
+                    Err(error) => log::debug!("OHOS window stack unavailable: {error}"),
+                }
+            })
+            .detach();
+    }
+
+    fn dispatch_reopen(&self) {
+        if !self.was_hidden.replace(false) {
+            return;
+        }
+        let mut callback = self.on_reopen.borrow_mut().take();
+        if let Some(ref mut callback) = callback {
+            callback();
+        }
+        *self.on_reopen.borrow_mut() = callback;
+    }
+
+    fn prepare_quit(&self) -> bool {
+        if self.quit_started.get() {
+            return true;
+        }
+        let mut callback = self.on_quit.borrow_mut().take();
+        let may_quit = callback.as_mut().is_none_or(|callback| callback());
+        *self.on_quit.borrow_mut() = callback;
+        if may_quit {
+            self.quit_started.set(true);
+        }
+        may_quit
+    }
+
     fn handle_ohos_event(&self, event: &Event, on_finish_launching: Option<Box<dyn FnOnce()>>) {
         // ArkUI can deliver raw contact and recognized Pan callbacks in the
         // same native input batch. Finish that batch before polling unrelated
@@ -405,6 +963,34 @@ impl OhosPlatform {
             return;
         }
 
+        if matches!(event, Event::Destroy) {
+            self.prepare_quit();
+        }
+        if matches!(event, Event::Stop) {
+            self.was_hidden.set(true);
+        } else if matches!(event, Event::Start) {
+            if self.hidden_window_ids.borrow().is_some() {
+                self.set_ability_visible(true);
+            } else {
+                self.dispatch_reopen();
+            }
+        }
+        if let Event::ConfigChanged(config) = event {
+            // The Ability configuration exposes the active language, but not
+            // a separate hardware keyboard layout identifier.
+            let changed = self
+                .keyboard_language
+                .borrow_mut()
+                .replace(config.language.clone())
+                .is_some_and(|previous| previous != config.language);
+            if changed {
+                let mut callback = self.keyboard_layout_change.borrow_mut().take();
+                if let Some(ref mut callback) = callback {
+                    callback();
+                }
+                *self.keyboard_layout_change.borrow_mut() = callback;
+            }
+        }
         let phase = match event {
             Event::Start => Some(AppLifecyclePhase::Foreground),
             Event::GainedFocus => Some(AppLifecyclePhase::Active),
@@ -428,6 +1014,7 @@ impl OhosPlatform {
         }
         if let Event::NewWant { uri } = event
             && !uri.is_empty()
+            && !self.queue_notification_uri(uri)
         {
             let mut callback = self.open_urls.borrow_mut().take();
             if let Some(ref mut callback) = callback {
@@ -448,6 +1035,9 @@ impl OhosPlatform {
         // This ensures tasks are processed in the run_loop, integrating GPUI with OpenHarmony's event loop
         self.run_foreground_tasks();
         self.dispatch_menu_events();
+        self.dispatch_menu_open_events();
+        self.dispatch_system_state_events();
+        self.dispatch_notification_responses();
 
         // Handle on_finish_launching callback first, before routing to windows.
         // This is critical because windows are created INSIDE the on_finish_launching callback,
@@ -458,6 +1048,22 @@ impl OhosPlatform {
         if let Some(callback) = on_finish_launching {
             debug!("OhosPlatform: Calling on_finish_launching on SurfaceCreate");
             callback();
+        }
+        if matches!(event, Event::SurfaceCreate)
+            && let Some(app) = self.app.borrow().as_ref()
+        {
+            // NativeAbility stores the cold-start Want after onAbilityCreate.
+            // GPUI may register on_open_urls before that store happens, so
+            // drain it once the first surface and app callbacks are ready.
+            let initial_uri = app.take_initial_want_uri();
+            if !initial_uri.is_empty() && !self.queue_notification_uri(&initial_uri) {
+                let mut callback = self.open_urls.borrow_mut().take();
+                if let Some(ref mut callback) = callback {
+                    callback(vec![initial_uri]);
+                }
+                *self.open_urls.borrow_mut() = callback;
+            }
+            self.dispatch_notification_responses();
         }
 
         let targeted = match event {
@@ -502,7 +1108,20 @@ impl OhosPlatform {
             warn!("OhosPlatform: No active windows to handle event");
         }
 
+        if matches!(
+            event,
+            Event::WindowFocusChanged { .. }
+                | Event::WindowDestroy
+                | Event::SubWindowClosed(_)
+                | Event::SurfaceCreate
+                | Event::SubWindowSurfaceCreate(_)
+                | Event::Start
+                | Event::Stop
+        ) {
+            self.invalidate_window_stack();
+        }
         for (window_id, status) in drain_pending_window_status() {
+            self.invalidate_window_stack();
             if let Some(window) = live_windows
                 .iter()
                 .find(|window| window.borrow().window_id() == i64::from(window_id))
@@ -683,19 +1302,42 @@ impl Clone for OhosPlatform {
             foreground_executor: self.foreground_executor.clone(),
             text_system: self.text_system.clone(),
             primary_display: self.primary_display.clone(),
+            other_displays: self.other_displays.clone(),
             main_receiver: self.main_receiver.clone(),
             gpu_context: self.gpu_context.clone(),
             windows: self.windows.clone(),
             window_index: self.window_index.clone(),
             open_urls: self.open_urls.clone(),
+            notification_response: self.notification_response.clone(),
+            notification_responses: self.notification_responses.clone(),
             app_lifecycle: self.app_lifecycle.clone(),
+            on_quit: self.on_quit.clone(),
+            quit_started: self.quit_started.clone(),
+            on_reopen: self.on_reopen.clone(),
+            was_hidden: self.was_hidden.clone(),
+            hidden_window_ids: self.hidden_window_ids.clone(),
+            focus_before_hide: self.focus_before_hide.clone(),
             memory_warning: self.memory_warning.clone(),
-            clipboard_cache: self.clipboard_cache.clone(),
+            system_sleep: self.system_sleep.clone(),
+            system_wake: self.system_wake.clone(),
+            sleeping: self.sleeping.clone(),
+            thermal_state: self.thermal_state.clone(),
+            thermal_state_change: self.thermal_state_change.clone(),
+            system_state_events: self.system_state_events.clone(),
+            bundle_code_dir: self.bundle_code_dir.clone(),
+            window_stack_state: self.window_stack_state.clone(),
+            window_stack_pending: self.window_stack_pending.clone(),
+            window_stack_generation: self.window_stack_generation.clone(),
+            keyboard_layout_change: self.keyboard_layout_change.clone(),
+            keyboard_language: self.keyboard_language.clone(),
+            appearance_override: self.appearance_override.clone(),
+            clipboard: self.clipboard.clone(),
             cursor_hidden_until_move: self.cursor_hidden_until_move.clone(),
             cursor_window_id: self.cursor_window_id.clone(),
             idle_sleep_guards: self.idle_sleep_guards.clone(),
             menus: self.menus.clone(),
             menu_events: self.menu_events.clone(),
+            menu_open_events: self.menu_open_events.clone(),
         }
     }
 }
@@ -748,29 +1390,38 @@ impl Platform for OhosPlatform {
         let Some(app) = self.app.borrow().clone() else {
             return;
         };
-
-        self.background_executor
+        let platform = self.clone();
+        let background = self.background_executor.clone();
+        // GPUI may call quit while its AppCell is borrowed. Defer the callback
+        // until the next foreground turn so shutdown can borrow it safely.
+        self.foreground_executor
             .spawn(async move {
-                let result = async {
-                    let response = app
-                        .bridge()?
-                        .call_sync_from_worker::<
-                            AppControlBridgePlugin,
-                            TerminateRequest,
-                            TerminateResponse,
-                        >("terminate", TerminateRequest { code: 0 })
-                        .await?;
-                    anyhow::ensure!(
-                        response.accepted,
-                        "OpenHarmony app-control plugin rejected termination"
-                    );
-                    Ok::<(), anyhow::Error>(())
+                if !platform.prepare_quit() {
+                    return;
                 }
-                .await;
-
-                if let Err(error) = result {
-                    warn!("Failed to terminate OpenHarmony application: {error}");
-                }
+                background
+                    .spawn(async move {
+                        let result = async {
+                            let response = app
+                                .bridge()?
+                                .call_sync_from_worker::<
+                                    AppControlBridgePlugin,
+                                    TerminateRequest,
+                                    TerminateResponse,
+                                >("terminate", TerminateRequest { code: 0 })
+                                .await?;
+                            anyhow::ensure!(
+                                response.accepted,
+                                "OpenHarmony app-control plugin rejected termination"
+                            );
+                            Ok::<(), anyhow::Error>(())
+                        }
+                        .await;
+                        if let Err(error) = result {
+                            warn!("Failed to terminate OpenHarmony application: {error}");
+                        }
+                    })
+                    .detach();
             })
             .detach();
     }
@@ -793,7 +1444,7 @@ impl Platform for OhosPlatform {
     }
 
     fn activate(&self, _ignoring_other_apps: bool) {
-        // Not supported on OHOS
+        self.set_ability_visible(true);
     }
 
     fn hide_cursor_until_mouse_moves(&self) {
@@ -825,7 +1476,7 @@ impl Platform for OhosPlatform {
     }
 
     fn hide(&self) {
-        // Not supported on OHOS
+        self.set_ability_visible(false);
     }
 
     fn hide_other_apps(&self) {
@@ -837,11 +1488,18 @@ impl Platform for OhosPlatform {
     }
 
     fn displays(&self) -> Vec<Rc<dyn PlatformDisplay>> {
+        let mut displays = Vec::new();
         if let Some(display) = self.primary_display.borrow().as_ref() {
-            vec![Rc::new(display.clone()) as Rc<dyn PlatformDisplay>]
-        } else {
-            vec![]
+            displays.push(Rc::new(display.clone()) as Rc<dyn PlatformDisplay>);
         }
+        displays.extend(
+            self.other_displays
+                .borrow()
+                .iter()
+                .cloned()
+                .map(|display| Rc::new(display) as Rc<dyn PlatformDisplay>),
+        );
+        displays
     }
 
     fn primary_display(&self) -> Option<Rc<dyn PlatformDisplay>> {
@@ -863,12 +1521,24 @@ impl Platform for OhosPlatform {
     }
 
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
+        self.refresh_window_stack();
+        let stack = self.window_stack_state.borrow();
+        let stack = stack.as_ref()?;
+        let windows = self
+            .windows
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect::<Vec<_>>();
         Some(
-            self.windows
-                .borrow()
+            stack
                 .iter()
-                .filter_map(Weak::upgrade)
-                .map(|window| window.borrow().handle)
+                .filter_map(|id| {
+                    windows.iter().find_map(|window| {
+                        let window = window.borrow();
+                        (window.window_id() == *id).then_some(window.handle)
+                    })
+                })
                 .collect(),
         )
     }
@@ -884,15 +1554,26 @@ impl Platform for OhosPlatform {
     fn screen_capture_sources(
         &self,
     ) -> oneshot::Receiver<GpuiResult<Vec<Rc<dyn crate::ScreenCaptureSource>>>> {
-        if let Some(app) = self.app.borrow().as_ref() {
-            let (width, height) = app.display_size();
-            screen_capture::sources(
-                i32::try_from(width).unwrap_or(0),
-                i32::try_from(height).unwrap_or(0),
-            )
-        } else {
-            screen_capture::sources(0, 0)
+        let mut targets = Vec::new();
+        if let Some(display) = self.primary_display.borrow().as_ref() {
+            let (width, height, _) = display.dimensions_and_scale();
+            targets.push(screen_capture::DisplayCaptureSource {
+                display_id: display.id_raw() as u64,
+                width,
+                height,
+                is_main: true,
+            });
         }
+        for display in self.other_displays.borrow().iter() {
+            let (width, height, _) = display.dimensions_and_scale();
+            targets.push(screen_capture::DisplayCaptureSource {
+                display_id: display.id_raw() as u64,
+                width,
+                height,
+                is_main: false,
+            });
+        }
+        screen_capture::sources(targets)
     }
 
     fn open_window(
@@ -901,6 +1582,26 @@ impl Platform for OhosPlatform {
         options: WindowParams,
     ) -> anyhow::Result<Box<dyn PlatformWindow>> {
         if let Some(app) = self.app.borrow().clone() {
+            let primary = self
+                .primary_display
+                .borrow()
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Primary OHOS display is unavailable"))?;
+            let display = if let Some(id) = options.display_id {
+                if primary.id() == id {
+                    primary.clone()
+                } else {
+                    self.other_displays
+                        .borrow()
+                        .iter()
+                        .find(|display| display.id() == id)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Requested OHOS display is unavailable"))?
+                }
+            } else {
+                primary.clone()
+            };
             let existing = self
                 .windows
                 .borrow()
@@ -912,8 +1613,12 @@ impl Platform for OhosPlatform {
                     .borrow()
                     .atlas()
                     .ok_or_else(|| anyhow::anyhow!("Primary OHOS window has no GPU atlas"))?;
-                let scale = app.scale();
+                let scale = display.scale_factor();
                 let bounds = options.bounds;
+                let display_id = options
+                    .display_id
+                    .map(|id| i64::try_from(u64::from(id)))
+                    .transpose()?;
                 let window_id = create_os_window(WindowCreateParams {
                     name: format!("gpui-{}", uuid::Uuid::new_v4()),
                     native_module_name: Some(app.module_name().ok_or_else(|| {
@@ -923,30 +1628,41 @@ impl Platform for OhosPlatform {
                     height: (bounds.size.height.as_f32() * scale).max(1.0) as i32,
                     x: (bounds.origin.x.as_f32() * scale) as i32,
                     y: (bounds.origin.y.as_f32() * scale) as i32,
+                    display_id,
                     ..Default::default()
                 })?;
                 (window_id, Some(atlas))
             } else {
+                anyhow::ensure!(
+                    display.id() == primary.id(),
+                    "The OHOS main window is already bound to the default display"
+                );
                 (0, None)
             };
-            let window = OhosWindow::new(
+            let window = OhosWindow::new(OhosWindowContext {
+                app: self.app.clone(),
                 handle,
-                options,
-                OhosWindowContext {
-                    app: self.app.clone(),
-                    gpu_context: self.gpu_context.clone(),
-                    foreground_executor: self.foreground_executor.clone(),
-                    frame_wake: self.dispatcher.frame_waker(),
-                    cursor_hidden_until_move: self.cursor_hidden_until_move.clone(),
-                    window_id,
-                    fallback_atlas,
-                },
-            )?;
+                params: options,
+                gpu_context: self.gpu_context.clone(),
+                display,
+                foreground_executor: self.foreground_executor.clone(),
+                frame_wake: self.dispatcher.frame_waker(),
+                clipboard: self.clipboard.clone(),
+                cursor_hidden_until_move: self.cursor_hidden_until_move.clone(),
+                appearance_override: self.appearance_override.clone(),
+                window_id,
+                fallback_atlas,
+                quit: Rc::new({
+                    let platform = self.clone();
+                    move || platform.quit()
+                }),
+            })?;
 
             // GPUI fetches sprite_atlas during window initialization and caches it.
             // Renderer must be ready at open_window time to avoid caching a broken atlas.
             if window_id == 0 {
                 window.initialize_renderer()?;
+                window.apply_window_options();
             }
 
             let window = Rc::new(RefCell::new(window));
@@ -954,6 +1670,7 @@ impl Platform for OhosPlatform {
             self.window_index
                 .borrow_mut()
                 .insert(window_id, Rc::downgrade(&window));
+            self.invalidate_window_stack();
             Ok(Box::new(super::window::OhosWindowHandle::new(window)))
         } else {
             Err(anyhow::anyhow!("OpenHarmonyApp not set"))
@@ -961,11 +1678,67 @@ impl Platform for OhosPlatform {
     }
 
     fn window_appearance(&self) -> WindowAppearance {
+        if let Some(appearance) = self.appearance_override.get() {
+            return appearance;
+        }
         self.app
             .borrow()
             .as_ref()
             .map(|app| appearance_for_color_mode(app.config().color_mode))
             .unwrap_or_default()
+    }
+
+    fn set_window_appearance(&self, appearance: Option<WindowAppearance>) {
+        self.appearance_override.set(appearance);
+        let system_appearance = self
+            .app
+            .borrow()
+            .as_ref()
+            .map(|app| appearance_for_color_mode(app.config().color_mode))
+            .unwrap_or_default();
+        let windows: Vec<_> = self
+            .windows
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect();
+        self.foreground_executor
+            .spawn(async move {
+                for window in windows {
+                    window
+                        .borrow()
+                        .set_appearance(appearance.unwrap_or(system_appearance));
+                }
+            })
+            .detach();
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        let color_mode = match appearance {
+            Some(WindowAppearance::Dark | WindowAppearance::VibrantDark) => 0,
+            Some(WindowAppearance::Light | WindowAppearance::VibrantLight) => 1,
+            None => 2,
+        };
+        self.background_executor
+            .spawn(async move {
+                let result = async {
+                    let response = app
+                        .bridge()?
+                        .call_sync_from_worker::<
+                            AppControlBridgePlugin,
+                            SetColorModeRequest,
+                            SetColorModeResponse,
+                        >("set-color-mode", SetColorModeRequest { color_mode })
+                        .await?;
+                    anyhow::ensure!(response.accepted, "OpenHarmony rejected the color mode");
+                    Ok::<(), anyhow::Error>(())
+                }
+                .await;
+                if let Err(error) = result {
+                    warn!("Failed to set OpenHarmony color mode: {error}");
+                }
+            })
+            .detach();
     }
 
     fn open_url(&self, url: &str) {
@@ -990,16 +1763,73 @@ impl Platform for OhosPlatform {
             .as_ref()
             .map(OpenHarmonyApp::take_initial_want_uri)
             .unwrap_or_default();
-        if !initial_uri.is_empty() {
+        if !initial_uri.is_empty() && !self.queue_notification_uri(&initial_uri) {
             callback(vec![initial_uri]);
         }
         *self.open_urls.borrow_mut() = Some(callback);
     }
 
-    fn register_url_scheme(&self, _url: &str) -> Task<Result<()>> {
-        Task::ready(Err(anyhow::anyhow!(
-            "URL scheme registration not supported on OHOS"
-        )))
+    fn show_system_notification(&self, notification: SystemNotification) {
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        self.background_executor
+            .spawn(async move {
+                let request = ShowNotificationRequest {
+                    tag: notification.tag.to_string(),
+                    title: notification.title.to_string(),
+                    body: notification.body.to_string(),
+                    actions: notification
+                        .actions
+                        .into_iter()
+                        .map(|action| NotificationAction {
+                            id: action.id.to_string(),
+                            label: action.label.to_string(),
+                        })
+                        .collect(),
+                };
+                match async { NotificationClient::new(&app)?.show(request).await }.await {
+                    Ok(true) => log::info!("OHOS notification published"),
+                    Ok(false) => warn!("OHOS notification was not accepted"),
+                    Err(error) => warn!("Failed to publish OHOS notification: {error}"),
+                }
+            })
+            .detach();
+    }
+
+    fn dismiss_system_notification(&self, tag: &str) {
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        let tag = tag.to_owned();
+        self.background_executor
+            .spawn(async move {
+                match async { NotificationClient::new(&app)?.dismiss(tag).await }.await {
+                    Ok(true) => log::info!("OHOS notification dismissed"),
+                    Ok(false) => warn!("OHOS notification dismissal was not accepted"),
+                    Err(error) => warn!("Failed to dismiss OHOS notification: {error}"),
+                }
+            })
+            .detach();
+    }
+
+    fn on_system_notification_response(
+        &self,
+        callback: Box<dyn FnMut(SystemNotificationResponse)>,
+    ) {
+        *self.notification_response.borrow_mut() = Some(callback);
+    }
+
+    fn register_url_scheme(&self, scheme: &str) -> Task<Result<()>> {
+        let Some(app) = self.app.borrow().clone() else {
+            return Task::ready(Err(anyhow::anyhow!("OpenHarmonyApp not set")));
+        };
+        let scheme = scheme.to_owned();
+        self.background_executor.spawn(async move {
+            app.check_url_scheme(scheme)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))
+        })
     }
 
     fn prompt_for_paths(
@@ -1118,20 +1948,20 @@ impl Platform for OhosPlatform {
             .detach();
     }
 
-    fn on_quit(&self, _callback: Box<dyn FnMut() -> bool>) {
-        // Handled by OpenHarmonyApp lifecycle
+    fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
+        *self.on_quit.borrow_mut() = Some(callback);
     }
 
-    fn on_reopen(&self, _callback: Box<dyn FnMut()>) {
-        // Not supported on OHOS
+    fn on_reopen(&self, callback: Box<dyn FnMut()>) {
+        *self.on_reopen.borrow_mut() = Some(callback);
     }
 
-    fn on_system_wake(&self, _callback: Box<dyn FnMut()>) {
-        // Not supported on OHOS
+    fn on_system_wake(&self, callback: Box<dyn FnMut()>) {
+        *self.system_wake.borrow_mut() = Some(callback);
     }
 
-    fn on_system_sleep(&self, _callback: Box<dyn FnMut()>) {
-        // Not supported on OHOS
+    fn on_system_sleep(&self, callback: Box<dyn FnMut()>) {
+        *self.system_sleep.borrow_mut() = Some(callback);
     }
 
     fn set_menus(&self, menus: Vec<Menu>, keymap: &Keymap) {
@@ -1189,12 +2019,12 @@ impl Platform for OhosPlatform {
         self.menus.borrow_mut().on_action = Some(callback);
     }
 
-    fn on_will_open_app_menu(&self, _callback: Box<dyn FnMut()>) {
-        // Not supported on OHOS
+    fn on_will_open_app_menu(&self, callback: Box<dyn FnMut()>) {
+        self.menus.borrow_mut().on_will_open = Some(callback);
     }
 
-    fn on_validate_app_menu_command(&self, _callback: Box<dyn FnMut(&dyn Action) -> bool>) {
-        // Not supported on OHOS
+    fn on_validate_app_menu_command(&self, callback: Box<dyn FnMut(&dyn Action) -> bool>) {
+        self.menus.borrow_mut().on_validate = Some(callback);
     }
 
     fn compositor_name(&self) -> &'static str {
@@ -1202,13 +2032,28 @@ impl Platform for OhosPlatform {
     }
 
     fn app_path(&self) -> Result<PathBuf> {
-        Err(anyhow::anyhow!("app_path not available on OHOS"))
+        self.bundle_code_dir
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("OHOS bundle code directory is not ready"))
     }
 
-    fn path_for_auxiliary_executable(&self, _name: &str) -> Result<PathBuf> {
-        Err(anyhow::anyhow!(
-            "path_for_auxiliary_executable not available on OHOS"
-        ))
+    fn path_for_auxiliary_executable(&self, name: &str) -> Result<PathBuf> {
+        let relative = Path::new(name);
+        anyhow::ensure!(
+            !name.is_empty()
+                && relative
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_))),
+            "auxiliary executable name must be a relative bundle path"
+        );
+        let path = self.app_path()?.join(relative);
+        anyhow::ensure!(
+            path.is_file(),
+            "auxiliary executable is not in the OHOS bundle"
+        );
+        Ok(path)
     }
 
     fn set_cursor_style(&self, style: CursorStyle) {
@@ -1237,111 +2082,21 @@ impl Platform for OhosPlatform {
     }
 
     fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        self.clipboard_cache.borrow().clone()
+        self.clipboard.read_cached()
     }
 
     fn read_from_clipboard_async(
         &self,
     ) -> Task<std::result::Result<Option<ClipboardItem>, ClipboardReadError>> {
-        let Some(app) = self.app.borrow().clone() else {
-            return Task::ready(Err(ClipboardReadError::Unavailable));
-        };
-        let cache = self.clipboard_cache.clone();
-        self.foreground_executor.spawn(async move {
-            let client = ClipboardClient::new(&app)
-                .map_err(|error| ClipboardReadError::Denied(error.to_string()))?;
-            let content = client
-                .read_content()
-                .await
-                .map_err(|error| ClipboardReadError::Denied(error.to_string()))?;
-            let mut entries = Vec::new();
-            if let Some(text) = content.text.filter(|text| !text.is_empty()) {
-                entries.push(ClipboardEntry::from(text));
-            }
-            if let Some(png) = content.png.filter(|png| !png.is_empty()) {
-                entries.push(ClipboardEntry::Image(Image::from_bytes(
-                    ImageFormat::Png,
-                    png,
-                )));
-            }
-            let paths = content
-                .uris
-                .iter()
-                .filter_map(|uri| match ohos_fileuri_binding::get_path_from_uri(uri) {
-                    Ok(path) => Some(PathBuf::from(path)),
-                    Err(error) => {
-                        warn!("Cannot map OHOS clipboard URI {uri}: {error}");
-                        None
-                    }
-                })
-                .collect();
-            if !content.uris.is_empty() {
-                entries.push(ClipboardEntry::ExternalPaths(ExternalPaths(paths)));
-            }
-            let item = (!entries.is_empty()).then_some(ClipboardItem { entries });
-            *cache.borrow_mut() = item.clone();
-            Ok(item)
-        })
+        self.clipboard.read()
     }
 
     fn write_to_clipboard(&self, item: ClipboardItem) {
-        let Some(app) = self.app.borrow().clone() else {
-            return;
-        };
-        enum Write {
-            Text(String),
-            Image(Vec<u8>),
-            Uris(Vec<String>),
-        }
-        let write = if let Some(ClipboardEntry::ExternalPaths(paths)) = item
-            .entries()
-            .iter()
-            .find(|entry| matches!(entry, ClipboardEntry::ExternalPaths(_)))
-        {
-            let uris = paths
-                .paths()
-                .iter()
-                .map(|path| {
-                    let path = path
-                        .to_str()
-                        .ok_or_else(|| anyhow::anyhow!("Clipboard path is not UTF-8"))?;
-                    ohos_fileuri_binding::get_uri_from_path(path).map_err(anyhow::Error::from)
-                })
-                .collect::<Result<Vec<_>>>();
-            match uris {
-                Ok(uris) => Write::Uris(uris),
-                Err(error) => {
-                    warn!("Cannot write OHOS clipboard paths: {error}");
-                    return;
-                }
-            }
-        } else if let Some(ClipboardEntry::Image(image)) = item
-            .entries()
-            .iter()
-            .find(|entry| matches!(entry, ClipboardEntry::Image(_)))
-        {
-            Write::Image(image.bytes.clone())
-        } else if let Some(text) = item.text() {
-            Write::Text(text)
-        } else {
-            warn!("OHOS clipboard item has no supported entries");
-            return;
-        };
-        let cache = self.clipboard_cache.clone();
+        let write = self.clipboard.write(item);
         self.foreground_executor
             .spawn(async move {
-                let result = async {
-                    let client = ClipboardClient::new(&app)?;
-                    match write {
-                        Write::Text(text) => client.write_text(text).await,
-                        Write::Image(bytes) => client.write_encoded_image(&bytes).await,
-                        Write::Uris(uris) => client.write_uris(uris).await,
-                    }
-                }
-                .await;
-                match result {
-                    Ok(()) => *cache.borrow_mut() = Some(item),
-                    Err(error) => warn!("Failed to write OHOS clipboard: {error}"),
+                if let Err(error) = write.await {
+                    warn!("Failed to write OHOS clipboard: {error}");
                 }
             })
             .detach();
@@ -1375,15 +2130,17 @@ impl Platform for OhosPlatform {
         Rc::new(super::keyboard::OhosKeyboardMapper)
     }
 
-    fn on_keyboard_layout_change(&self, _callback: Box<dyn FnMut()>) {
-        // Not supported on OHOS
+    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
+        *self.keyboard_layout_change.borrow_mut() = Some(callback);
     }
 
     fn thermal_state(&self) -> ThermalState {
-        ThermalState::Nominal
+        self.thermal_state.get()
     }
 
-    fn on_thermal_state_change(&self, _callback: Box<dyn FnMut()>) {}
+    fn on_thermal_state_change(&self, callback: Box<dyn FnMut()>) {
+        *self.thermal_state_change.borrow_mut() = Some(callback);
+    }
 
     fn prevent_idle_sleep(&self, _reason: &str) -> Task<Result<ActivityGuard>> {
         let Some(app) = self.app.borrow().clone() else {

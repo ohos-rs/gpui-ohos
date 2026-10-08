@@ -1,4 +1,5 @@
 mod capture_pixels;
+mod clipboard;
 mod credentials;
 mod dispatcher;
 mod display;
@@ -15,6 +16,8 @@ mod wgpu_atlas;
 mod wgpu_context;
 mod wgpu_renderer;
 mod window;
+mod window_manipulation;
+mod window_state;
 mod worker_state;
 mod workers;
 

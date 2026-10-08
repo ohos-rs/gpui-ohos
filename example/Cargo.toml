@@ -19,9 +19,9 @@ log = "0.4"
 ohos-hilog-binding = { version = "*", features = ["log"] }
 napi-derive-ohos = "=1.2.0"
 napi-ohos = "=1.2.0"
-openharmony-ability = { git = "https://github.com/richerfu/openharmony-ability.git", branch = "feat/pr82-nearsend-integration" }
-openharmony-ability-derive = { git = "https://github.com/richerfu/openharmony-ability.git", branch = "feat/pr82-nearsend-integration" }
-openharmony-ability-plugin-permission = { git = "https://github.com/richerfu/openharmony-ability.git", branch = "feat/pr82-nearsend-integration" }
+openharmony-ability = { path = "ohos/vendor/openharmony-ability/crates/ability" }
+openharmony-ability-derive = { path = "ohos/vendor/openharmony-ability/crates/derive" }
+openharmony-ability-plugin-permission = { path = "ohos/vendor/openharmony-ability/crates/plugin-permission" }
 
 [features]
 default = ["gles"]
@@ -33,8 +33,10 @@ napi-build-ohos = "=1.2.0"
 
 [workspace]
 resolver = "2"
+exclude = ["ohos/vendor/openharmony-ability", "ohos/vendor/openharmony-ability/crates/*"]
 
 [patch.crates-io]
+ohos-ime-binding = { path = "../../../ohos-rs/ohos-native-bindings/crates/ime" }
 ohos-accessibility-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
 ohos-accessibility-sys = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }
 ohos-xcomponent-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "c05f75ebc489ad2a8c7f7b314aac38a27fb24836" }

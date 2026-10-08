@@ -1,4 +1,4 @@
 [submodule "example/ohos/vendor/openharmony-ability"]
 	path = example/ohos/vendor/openharmony-ability
 	url = https://github.com/richerfu/openharmony-ability.git
-	branch = feat/pr82-nearsend-integration
+	branch = feat/ohos-adaptation-runtime-fixes

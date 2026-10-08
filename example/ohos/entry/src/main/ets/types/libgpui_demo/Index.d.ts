@@ -34,6 +34,18 @@ export interface UrlRevealRequest {
   path: string
 }
 
+export interface UrlSchemeRequest {
+  scheme: string
+}
+
+export interface UrlSchemeResponse {
+  declared: boolean
+}
+
+export interface ClipboardChangedEvent {
+
+}
+
 export interface ClipboardClearRequest {
 
 }
@@ -48,12 +60,24 @@ export interface ClipboardReadContentResponse {
   uris: Array<string>
 }
 
+export interface ClipboardReadRecordsResponse {
+  records: Array<ClipboardRecord>
+}
+
 export interface ClipboardReadTextRequest {
 
 }
 
 export interface ClipboardReadTextResponse {
   text?: string
+}
+
+/** One native pasteboard record. Exactly one of text, encoded_image, or uri is set. */
+export interface ClipboardRecord {
+  text?: string
+  metadata?: string
+  encodedImage?: Array<number>
+  uri?: string
 }
 
 export interface ClipboardWriteEncodedImageRequest {
@@ -76,6 +100,10 @@ export interface ClipboardWriteImageRequest {
 
 export interface ClipboardWriteImageResponse {
   accepted: boolean
+}
+
+export interface ClipboardWriteRecordsRequest {
+  records: Array<ClipboardRecord>
 }
 
 export interface ClipboardWriteTextRequest {
@@ -189,6 +217,11 @@ export interface PreviewTextEventData {
   end: number
 }
 
+export interface SelectionEventData {
+  start: number
+  end: number
+}
+
 export interface WindowStageEventCallback {
   onWindowStageCreate: () => void
   onWindowStageDestroy: () => void
@@ -272,6 +305,85 @@ export declare function registerUiAbilityStage(windowId: number): void
   */
 export declare function updateCursorPosition(x: number, y: number): void
 
+export interface AvailableArea {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+export interface DisplaySnapshot {
+  id: number
+  width: number
+  height: number
+  densityPixels: number
+  availableArea?: AvailableArea
+  isDefault: boolean
+}
+
+export interface GetAvailableAreaRequest {
+
+}
+
+export interface GetAvailableAreaResponse {
+  area: AvailableArea
+}
+
+export interface GetBundleCodeDirRequest {
+
+}
+
+export interface GetBundleCodeDirResponse {
+  path: string
+}
+
+export interface GetDisplaysRequest {
+
+}
+
+export interface GetDisplaysResponse {
+  displays: Array<DisplaySnapshot>
+}
+
+export interface GetThermalLevelRequest {
+
+}
+
+export interface GetThermalLevelResponse {
+  level: number
+}
+
+/**
+  * 0..7 correspond to `thermal.ThermalLevel`. `kind` is thermal, sleep, wake,
+  * available-area, or displays.
+  */
+export interface SystemStateChangedEvent {
+  kind: string
+  thermalLevel?: number
+  availableArea?: AvailableArea
+  displays?: Array<DisplaySnapshot>
+}
+
+export interface DismissNotificationRequest {
+  tag: string
+}
+
+export interface NotificationAcknowledgement {
+  accepted: boolean
+}
+
+export interface NotificationAction {
+  id: string
+  label: string
+}
+
+export interface ShowNotificationRequest {
+  tag: string
+  title: string
+  body: string
+  actions: Array<NotificationAction>
+}
+
 /** Empty request marker for the `restart` action. */
 export interface RestartRequest {
 
@@ -281,6 +393,147 @@ export interface RestartRequest {
 export interface RestartResponse {
   /** 0 on success, negative on failure (mirrors the former TSFN contract). */
   code: number
+}
+
+export interface AboutMetadataData {
+  name?: string
+  version?: string
+  shortVersion?: string
+  authors?: Array<string>
+  comments?: string
+  copyright?: string
+  license?: string
+  website?: string
+}
+
+export interface AvailableArea {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+export interface DismissNotificationRequest {
+  tag: string
+}
+
+export interface DisplaySnapshot {
+  id: number
+  width: number
+  height: number
+  densityPixels: number
+  availableArea?: AvailableArea
+  isDefault: boolean
+}
+
+export interface GetAvailableAreaRequest {
+
+}
+
+export interface GetAvailableAreaResponse {
+  area: AvailableArea
+}
+
+export interface GetBundleCodeDirRequest {
+
+}
+
+export interface GetBundleCodeDirResponse {
+  path: string
+}
+
+export interface GetDisplaysRequest {
+
+}
+
+export interface GetDisplaysResponse {
+  displays: Array<DisplaySnapshot>
+}
+
+export interface GetThermalLevelRequest {
+
+}
+
+export interface GetThermalLevelResponse {
+  level: number
+}
+
+export interface MenuAcknowledgement {
+  accepted: boolean
+}
+
+export interface MenuClickEvent {
+  menuId: string
+  windowId?: string
+}
+
+export interface MenuItemData {
+  id: string
+  type: string
+  text?: string
+  enabled?: boolean
+  accelerator?: string
+  predefinedType?: string
+  checked?: boolean
+  icon?: string
+  nativeIcon?: string
+  submenuItems?: Array<MenuItemData>
+  aboutMetadata?: AboutMetadataData
+}
+
+export interface MenuOpenEvent {
+  windowId: string
+}
+
+export interface MenuPopupRequest {
+  /** Serialized `Vec<MenuItemData>` JSON. */
+  jsonData: string
+  x?: number
+  y?: number
+  windowId: string
+}
+
+export interface MenuPredefinedRequest {
+  action: string
+  windowId?: string
+}
+
+export interface MenuSetMenubarRequest {
+  /** Serialized `Vec<MenuItemData>` JSON. */
+  jsonData: string
+  windowId: string
+}
+
+export interface MenuSetVisibleRequest {
+  visible: boolean
+  windowId: string
+}
+
+export interface NotificationAcknowledgement {
+  accepted: boolean
+}
+
+export interface NotificationAction {
+  id: string
+  label: string
+}
+
+export interface ShowNotificationRequest {
+  tag: string
+  title: string
+  body: string
+  actions: Array<NotificationAction>
+}
+
+/**
+  * 0..7 correspond to `thermal.ThermalLevel`. `kind` is thermal, sleep, wake,
+  * available-area, or displays.
+  */
+export interface SystemStateChangedEvent {
+  kind: string
+  thermalLevel?: number
+  availableArea?: AvailableArea
+  displays?: Array<DisplaySnapshot>
 }
 
 export interface AboutMetadataData {
@@ -315,6 +568,10 @@ export interface MenuItemData {
   nativeIcon?: string
   submenuItems?: Array<MenuItemData>
   aboutMetadata?: AboutMetadataData
+}
+
+export interface MenuOpenEvent {
+  windowId: string
 }
 
 export interface MenuPopupRequest {
@@ -475,10 +732,40 @@ export interface WindowMoveRequest {
   y: number
 }
 
+export interface WindowPromptAnchor {
+  x: number
+  y: number
+}
+
+export interface WindowPromptRequest {
+  windowId: number
+  message: string
+  detail?: string
+  /** 0 information, 1 warning, 2 critical. */
+  level: number
+  buttons: Array<string>
+  cancelIndex?: number
+  /** Optional content-local logical position for an anchored window menu. */
+  anchor?: WindowPromptAnchor
+}
+
+export interface WindowPromptResponse {
+  index: number
+}
+
 export interface WindowResizeRequest {
   windowId: number
   width: number
   height: number
+}
+
+export interface WindowStackRequest {
+  displayId: number
+  windowIds: Array<number>
+}
+
+export interface WindowStackResponse {
+  windowIds: Array<number>
 }
 
 export interface WindowStateResponse {

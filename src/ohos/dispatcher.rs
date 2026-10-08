@@ -145,6 +145,10 @@ impl OhosDispatcher {
             .pop_front()
     }
     #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "Used by the separate tests/touch regression crate"
+    )]
     pub(crate) fn has_due_timers(&self) -> bool {
         !self
             .ready_timers

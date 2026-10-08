@@ -3,7 +3,11 @@
     "name": "entry",
     "type": "entry",
     "mainElement": "EntryAbility",
-    "deviceTypes": ["phone", "tablet", "2in1"],
+    "deviceTypes": [
+      "phone",
+      "tablet",
+      "2in1"
+    ],
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
@@ -17,8 +21,40 @@
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
         "skills": [
-          { "entities": ["entity.system.home"], "actions": ["ohos.want.action.home"] }
+          {
+            "entities": [
+              "entity.system.home"
+            ],
+            "actions": [
+              "ohos.want.action.home"
+            ]
+          },
+          {
+            "entities": [
+              "entity.system.browsable"
+            ],
+            "actions": [
+              "ohos.want.action.viewData"
+            ],
+            "uris": [
+              {
+                "scheme": "gpui-demo"
+              }
+            ]
+          }
         ]
+      }
+    ],
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.READ_PASTEBOARD",
+        "reason": "$string:clipboard_permission_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
       }
     ]
   }
