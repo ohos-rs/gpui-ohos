@@ -59,6 +59,8 @@ repository = "https://github.com/ohos-rs/gpui-ohos"
 default = ["gles"]
 gles = ["wgpu/gles"]
 vulkan = ["wgpu/vulkan"]
+xcomponent-frames = []
+frame-metrics = []
 
 [lib]
 name = "gpui_ohos"

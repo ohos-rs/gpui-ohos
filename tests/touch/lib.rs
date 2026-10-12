@@ -24,6 +24,12 @@ mod dispatcher;
 #[path = "../../src/ohos/frame_clock.rs"]
 mod frame_clock;
 #[allow(dead_code)]
+#[path = "../../src/ohos/frame_demand.rs"]
+mod frame_demand;
+#[allow(dead_code)]
+#[path = "../../src/ohos/frame_metrics.rs"]
+mod frame_metrics;
+#[allow(dead_code)]
 #[path = "../../src/ohos/frame_request.rs"]
 mod frame_request;
 #[cfg(target_os = "macos")]

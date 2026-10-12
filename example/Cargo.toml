@@ -27,6 +27,8 @@ openharmony-ability-plugin-permission = { path = "ohos/vendor/openharmony-abilit
 default = ["gles"]
 gles = ["gpui-ohos/gles"]
 vulkan = ["gpui-ohos/vulkan"]
+xcomponent-frames = ["gpui-ohos/xcomponent-frames"]
+frame-metrics = ["gpui-ohos/frame-metrics"]
 
 [build-dependencies]
 napi-build-ohos = "=1.2.0"

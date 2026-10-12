@@ -87,6 +87,7 @@ pub(crate) struct OhosPlatform {
     gpu_context: Arc<WgpuContext>,
     windows: Rc<RefCell<Vec<Weak<RefCell<OhosWindow>>>>>,
     window_index: Rc<RefCell<FxHashMap<i64, Weak<RefCell<OhosWindow>>>>>,
+    frame_callback_active: Rc<Cell<bool>>,
     open_urls: OpenUrlsCallback,
     notification_response: NotificationResponseCallback,
     notification_responses: Rc<RefCell<VecDeque<SystemNotificationResponse>>>,
@@ -407,6 +408,7 @@ impl OhosPlatform {
             gpu_context,
             windows: Rc::new(RefCell::new(Vec::new())),
             window_index: Rc::new(RefCell::new(FxHashMap::default())),
+            frame_callback_active: Rc::new(Cell::new(false)),
             open_urls: Rc::new(RefCell::new(None)),
             notification_response: Rc::new(RefCell::new(None)),
             notification_responses: Rc::new(RefCell::new(VecDeque::new())),
@@ -1019,6 +1021,29 @@ impl OhosPlatform {
     }
 
     fn handle_ohos_event(&self, event: &Event, on_finish_launching: Option<Box<dyn FnOnce()>>) {
+        let redraw = match event {
+            Event::WindowRedraw(interval) => Some((0, interval)),
+            Event::SubWindowRedraw {
+                window_id,
+                interval,
+            } => Some((*window_id, interval)),
+            _ => None,
+        };
+        if let Some((id, interval)) = redraw {
+            // No foreground tasks may run inside the native frame callback, including
+            // tasks that change another window's callback registration.
+            let _scope = super::frame_delivery::FrameCallbackScope::enter(
+                self.frame_callback_active.clone(),
+            );
+            let window = self.window_index.borrow().get(&id).and_then(Weak::upgrade);
+            if let Some(window) = window {
+                window
+                    .borrow()
+                    .handle_event(&Event::WindowRedraw(interval.clone()));
+            }
+            return;
+        }
+
         // ArkUI can deliver raw contact and recognized Pan callbacks in the
         // same native input batch. Finish that batch before polling unrelated
         // futures or presenting a frame, both of which may block the UI thread.
@@ -1140,22 +1165,14 @@ impl OhosPlatform {
             self.dispatch_notification_responses();
         }
 
-        let targeted = match event {
-            Event::WindowRedraw(_) => Some(0),
-            Event::SubWindowRedraw { window_id, .. } | Event::WindowResize { window_id, .. } => {
-                Some(*window_id)
-            }
-            _ => None,
-        };
-        if let Some(id) = targeted {
-            let window = self.window_index.borrow().get(&id).and_then(Weak::upgrade);
+        if let Event::WindowResize { window_id, .. } = event {
+            let window = self
+                .window_index
+                .borrow()
+                .get(window_id)
+                .and_then(Weak::upgrade);
             if let Some(window) = window {
-                match event {
-                    Event::SubWindowRedraw { interval, .. } => window
-                        .borrow()
-                        .handle_event(&Event::WindowRedraw(interval.clone())),
-                    _ => window.borrow().handle_event(event),
-                }
+                window.borrow().handle_event(event);
             }
             return;
         }
@@ -1389,6 +1406,7 @@ impl Clone for OhosPlatform {
             gpu_context: self.gpu_context.clone(),
             windows: self.windows.clone(),
             window_index: self.window_index.clone(),
+            frame_callback_active: self.frame_callback_active.clone(),
             open_urls: self.open_urls.clone(),
             notification_response: self.notification_response.clone(),
             notification_responses: self.notification_responses.clone(),
@@ -1730,6 +1748,7 @@ impl Platform for OhosPlatform {
                 display,
                 foreground_executor: self.foreground_executor.clone(),
                 frame_wake: self.dispatcher.frame_waker(),
+                frame_callback_active: self.frame_callback_active.clone(),
                 clipboard: self.clipboard.clone(),
                 cursor_hidden_until_move: self.cursor_hidden_until_move.clone(),
                 cursor_style: self.cursor_style.clone(),

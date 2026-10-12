@@ -4,6 +4,10 @@ mod credentials;
 mod dispatcher;
 mod display;
 mod frame_clock;
+mod frame_delivery;
+mod frame_demand;
+#[cfg(feature = "frame-metrics")]
+mod frame_metrics;
 mod frame_request;
 mod keyboard;
 mod platform;
