@@ -30,12 +30,13 @@ use openharmony_ability_plugin_window::WindowClient;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use super::display::OhosDisplay;
+use super::frame_clock::FrameClock;
 use super::keyboard::OhosKeyState;
 use super::platform::appearance_for_color_mode;
 use super::touch_scroll::{NativePanInput, TouchScroll};
 use super::wgpu_atlas::WgpuAtlas;
 use super::wgpu_context::WgpuContext;
-use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
+use super::wgpu_renderer::{Presentation, WgpuRenderer, WgpuSurfaceConfig};
 use crate::{
     A11yCallbacks, AnyWindowHandle, Bounds, Capslock, DevicePixels, Edges, ForegroundExecutor,
     GestureTuning, GpuSpecs, KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent,
@@ -107,6 +108,7 @@ pub(crate) struct OhosWindow {
     clipboard: super::clipboard::OhosClipboard,
     callbacks: Rc<RefCell<WindowCallbacks>>,
     renderer: RefCell<Option<WgpuRenderer>>,
+    presentation: Cell<Presentation>,
     surface_available: Cell<bool>,
     gpu_context: Arc<WgpuContext>,
     display: OhosDisplay,
@@ -142,6 +144,7 @@ pub(crate) struct OhosWindow {
 /// the tick; drawing stays on the Ability's main thread.
 struct FrameScheduler {
     vsync: Vsync,
+    clock: Option<FrameClock>,
     state: Arc<super::frame_request::FrameRequest>,
     waker: Arc<super::dispatcher::MainWake>,
 }
@@ -149,6 +152,7 @@ impl FrameScheduler {
     fn new(window_id: i64, waker: Arc<super::dispatcher::MainWake>) -> Option<Arc<Self>> {
         Some(Arc::new(Self {
             vsync: Vsync::try_new(format!("gpui-ohos-{window_id}"))?,
+            clock: FrameClock::new(),
             state: Arc::new(super::frame_request::FrameRequest::default()),
             waker,
         }))
@@ -159,8 +163,12 @@ impl FrameScheduler {
         };
         let state = self.state.clone();
         let waker = self.waker.clone();
-        let result = self.vsync.request_frame_once(move |_| {
-            if state.complete(ticket) {
+        let clock = self.clock;
+        let result = self.vsync.request_frame_once(move |timestamp_ns| {
+            let frame_time = clock
+                .and_then(|clock| clock.instant_for_timestamp(timestamp_ns))
+                .unwrap_or_else(Instant::now);
+            if state.complete(ticket, frame_time) {
                 waker.notify();
             }
         });
@@ -170,7 +178,7 @@ impl FrameScheduler {
             warn!("Failed to request OHOS VSync frame: {result}");
         }
     }
-    fn take_pending(&self) -> bool {
+    fn take_pending(&self) -> Option<Instant> {
         self.state.take_pending()
     }
     fn set_active(&self, active: bool) {
@@ -451,6 +459,7 @@ impl OhosWindow {
                 hit_test_window_control: None,
             })),
             renderer: RefCell::new(None),
+            presentation: Cell::new(Presentation::Unavailable),
             surface_available: Cell::new(false),
             gpu_context,
             display,
@@ -501,15 +510,15 @@ impl OhosWindow {
         }
     }
 
-    pub(crate) fn take_pending_frame(&self) -> bool {
+    pub(crate) fn take_pending_frame(&self) -> Option<Instant> {
         self.sync_frame_delivery();
-        !self.closed.get()
-            && self.surface_available.get()
-            && self.visibility.get() == WindowVisibility::Visible
-            && self
-                .frame_scheduler
-                .as_ref()
-                .is_some_and(|scheduler| scheduler.take_pending())
+        if self.closed.get()
+            || !self.surface_available.get()
+            || self.visibility.get() != WindowVisibility::Visible
+        {
+            return None;
+        }
+        self.frame_scheduler.as_ref()?.take_pending()
     }
 
     fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
@@ -536,21 +545,24 @@ impl OhosWindow {
         }
     }
 
-    pub(crate) fn draw_requested_frame(&self) {
+    pub(crate) fn draw_requested_frame(&self, frame_time: Instant) {
         if self.closed.get()
             || !self.surface_available.get()
             || self.visibility.get() != WindowVisibility::Visible
         {
             return;
         }
-        let momentum_input = self.touch_scroll.borrow_mut().tick(Instant::now());
+        let momentum_input = self.touch_scroll.borrow_mut().tick(frame_time);
         if let Some(input) = momentum_input {
             self.dispatch_input(input);
         }
         let mut callback = self.callbacks.borrow_mut().request_frame.take();
         if let Some(ref mut callback) = callback {
             callback(RequestFrameOptions {
-                require_presentation: false,
+                // GPUI clears its needs_present flag after PlatformWindow::draw,
+                // including failed acquisitions. Keep that demand here and let
+                // GPUI present the latest scene without forcing another layout.
+                require_presentation: self.presentation.get() != Presentation::Presented,
                 force_render: false,
             });
         }
@@ -1144,6 +1156,7 @@ impl OhosWindow {
     fn update_visibility(&self, next: WindowVisibility) {
         if next != WindowVisibility::Visible {
             self.cancel_touch_input();
+            self.presentation.set(Presentation::Unavailable);
         }
         if let Some(scheduler) = &self.frame_scheduler {
             scheduler.set_active(next == WindowVisibility::Visible && self.surface_available.get());
@@ -1308,6 +1321,7 @@ impl OhosWindow {
                 .as_ref()
                 .is_some_and(|app| app.native_window_for(self.window_id).is_some())
         {
+            self.presentation.set(Presentation::Unavailable);
             return;
         }
         let Some(client) = self.window_client() else {
@@ -1699,6 +1713,7 @@ impl OhosWindow {
             }
             Event::SurfaceDestroy => {
                 self.cancel_touch_input();
+                self.presentation.set(Presentation::Unavailable);
                 self.surface_available.set(false);
                 if let Some(scheduler) = &self.frame_scheduler {
                     scheduler.set_active(false);
@@ -1819,7 +1834,7 @@ impl OhosWindow {
                     .as_ref()
                     .is_none_or(|scheduler| scheduler.state.failed())
                 {
-                    self.draw_requested_frame();
+                    self.draw_requested_frame(Instant::now());
                 }
             }
             Event::Input(input_event) => {
@@ -3427,13 +3442,21 @@ impl PlatformWindow for OhosWindow {
             && let Err(e) = self.initialize_renderer()
         {
             warn!("OhosWindow: Failed to initialize renderer in draw(): {}", e);
+            self.presentation.set(Presentation::Unavailable);
             return;
         }
 
         // Use WGPU renderer to render the scene.
         if let Some(ref mut renderer) = *self.renderer.borrow_mut() {
-            renderer.draw(scene);
+            let presentation = renderer.draw(scene);
+            self.presentation.set(presentation);
+            if presentation == Presentation::Retry
+                && let Some(scheduler) = &self.frame_scheduler
+            {
+                scheduler.request_frame();
+            }
         } else {
+            self.presentation.set(Presentation::Unavailable);
             warn!("OhosWindow: draw called but renderer is not available");
         }
     }

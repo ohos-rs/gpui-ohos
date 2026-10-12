@@ -31,7 +31,8 @@ Rendering and post-release momentum advance through a single demand-driven
 native VSync source; visibility and surface changes are applied before drawing.
 
 See [touch input and frame scheduling](./docs/touch-input.md) for ownership and
-lifecycle details. The host regression harness compiles the actual platform
+lifecycle details, and [frame pacing and quad rendering](./docs/scroll-performance-2026-10-12.md)
+for the high-refresh-rate fixes and device validation. The host regression harness compiles the actual platform
 input adapter without linking OHOS native libraries:
 
 ```bash

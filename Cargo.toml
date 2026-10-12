@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+libc = "0.2"
 anyhow = "1"
 bytemuck = "1"
 crossbeam-channel = "0.5"
@@ -101,6 +102,7 @@ uuid.workspace = true
 wgpu.workspace = true
 
 [target.'cfg(target_env = "ohos")'.dependencies]
+libc.workspace = true
 accesskit_ohos = { git = "https://github.com/richerfu/accesskit.git", rev = "ea2d8c4", features = ["api-15"] }
 ohos-asset-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "b732254b974f5a0a85c58cd1c20744b3f32e81fd" }
 ohos-accessibility-binding = "0.1"
