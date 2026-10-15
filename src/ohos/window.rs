@@ -16,6 +16,7 @@ use openharmony_ability::{
     ArkUiInputEvent, AvoidAreaType, Event, ImeEvent, InputEvent, OpenHarmonyApp, PointerInputData,
     XComponentInputEvent,
     arkui::arkui_input_binding::{UIInputAction, UIInputSourceType, UIInputToolType},
+    arkui::component::attribute::ArkUICommonAttribute,
     ime::{
         Action as ImeAction, Direction as ImeDirection, EnterKey, InputType, Rect as ImeCursorRect,
         TextState,
@@ -807,6 +808,23 @@ impl OhosWindow {
         // The SDK has no autocorrect, capitalization, or suggestion flags.
         if self.ime_action.replace(configuration.input_action) != configuration.input_action {
             self.apply_ime_action();
+        }
+    }
+
+    fn focus_native_surface(&self) {
+        if !self.active.get() || !self.surface_available.get() {
+            return;
+        }
+        // Release the app's component lock before changing ArkUI focus.
+        let component = self
+            .app
+            .borrow()
+            .as_ref()
+            .and_then(|app| app.with_xcomponent_for(self.window_id, Clone::clone));
+        if let Some(component) = component
+            && let Err(error) = component.set_focus_status(true)
+        {
+            warn!("Failed to focus OHOS render surface: {error}");
         }
     }
 
@@ -1696,6 +1714,8 @@ impl OhosWindow {
                 }
                 self.emit_resize_callback();
                 self.refresh_insets();
+                // Activation can precede XComponent creation on cold start.
+                self.focus_native_surface();
             }
             Event::SurfaceDestroy => {
                 self.cancel_touch_input();
@@ -1814,8 +1834,10 @@ impl OhosWindow {
             Event::Start => self.update_visibility(WindowVisibility::Visible),
             Event::Stop => self.update_visibility(WindowVisibility::Hidden),
             Event::WindowRedraw(_) => {
-                self.frames.on_callback();
-                self.draw_requested_frame(Instant::now());
+                if !self.frames.native_delivering() {
+                    self.frames.on_callback();
+                    self.draw_requested_frame(Instant::now());
+                }
             }
             Event::Input(input_event) => {
                 self.handle_input_event(input_event);
@@ -1848,6 +1870,10 @@ impl OhosWindow {
                         self.emit_visual_viewport_changed();
                     }
                 } else {
+                    // Native menu popups can leave ArkUI focus on the menu bar.
+                    // GPUI focus alone does not restore hardware key delivery,
+                    // especially for dialogs without an IME input handler.
+                    self.focus_native_surface();
                     // GPUI can retain the editor's focus while another native
                     // window owns the process-wide IME. Returning to this window
                     // must reattach its editor even without a GPUI FocusGained.
