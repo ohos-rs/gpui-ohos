@@ -21,6 +21,7 @@ gpui = { git = "https://github.com/ohos-rs/zed", rev = "f45c7c22d0", default-fea
 itertools = "0.14.0"
 image = { version = "0.25.1", default-features = false }
 log = "0.4"
+ohos-vsync-binding = { version = "0.3.1", default-features = false, features = ["api-20"] }
 napi-ohos = "=1.2.0"
 napi-derive-ohos = "=1.2.0"
 # GPUI uses owned ArkUI key events, mouse cancellation, and native file drag/drop on every backend.
@@ -60,6 +61,7 @@ repository = "https://github.com/ohos-rs/gpui-ohos"
 default = ["gles"]
 gles = ["wgpu/gles"]
 vulkan = ["wgpu/vulkan"]
+native-vsync = ["dep:ohos-vsync-binding"]
 
 [lib]
 name = "gpui_ohos"
@@ -76,6 +78,7 @@ futures.workspace = true
 itertools.workspace = true
 image.workspace = true
 log.workspace = true
+ohos-vsync-binding = { workspace = true, optional = true }
 openharmony-ability.workspace = true
 openharmony-ability-plugin-menu.workspace = true
 openharmony-ability-plugin-notification.workspace = true
