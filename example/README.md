@@ -65,16 +65,30 @@ sh scripts/build-native.sh
 
 For a desktop or 2in1 target, build the native module with
 `OHOS_DEVICE_TYPE=desktop sh scripts/build-native.sh`. This also copies the
-new native library and declarations into the HAP project. The Ability's `isDesktop`
-flag gates the floating window menu bar. Use the default mobile build for a
-phone target.
+new native library and declarations into the HAP project. Ability `1.0.0-beta.3`
+provides floating native windows with a menu host on both device classes. Use
+the default mobile build for a phone target.
 
 ## Build the HAP
 
-Initialize the Ability dependency from the repository root:
+Rust Ability dependencies use the published `=1.0.0-beta.3` crates. Until the
+HAR packages are approved, the ArkTS dependencies use `1.0.0-beta.3` sources
+from Ability's `docs/complete-beta3-changelogs` branch, pinned at `93b3e22`.
+Initialize the submodule from the repository root:
 
 ```sh
+git submodule sync --recursive
 git submodule update --init --recursive
+```
+
+`EntryAbility.ets` explicitly configures the clipboard metadata MIME and the
+`gpui-notification` response scheme required by the plugins.
+The source packages use `workspace:*` dependencies, so install them with
+`ohpm-rs` from `ohpm-cli` 0.3.0 or later (the upstream Ability workspace uses
+the same tool):
+
+```sh
+cargo install ohpm-cli --version 0.3.0 --locked
 ```
 
 Copy the local project files and configure a debug signing certificate for the
@@ -91,7 +105,7 @@ its product `signingConfig` in `build-profile.json5`. Then build with DevEco
 Studio or its command-line tools:
 
 ```sh
-ohpm install --all
+ohpm-rs install --all
 hvigorw assembleHap --mode module -p product=default
 ```
 

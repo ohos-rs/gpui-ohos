@@ -19,18 +19,28 @@ The GPUI dependency is pinned to the `ohos-rs/zed` commit that exposes the
 external-platform entry point and excludes OHOS from the Linux backend. All
 OHOS windowing, input, rendering, IME, and gesture behavior lives here.
 
-OpenHarmony Ability and its Rust plugins use the
-[`feat/ohos-adaptation-runtime-fixes`](https://github.com/richerfu/openharmony-ability/tree/feat/ohos-adaptation-runtime-fixes)
-branch. Rust crates and ArkTS packages share the example's initialized
-`openharmony-ability` submodule; its Git entry pins the exact commit. Run
-`git submodule update --init --recursive` before building.
+OpenHarmony Ability and all Rust plugin dependencies are pinned to the published
+`=1.0.0-beta.3` crates. The example's ArkTS HAR dependencies use the matching
+`1.0.0-beta.3` source packages from
+[`docs/complete-beta3-changelogs`](https://github.com/harmony-contrib/openharmony-ability/tree/docs/complete-beta3-changelogs)
+while HAR publication is pending. The Ability submodule pins commit `93b3e22`;
+it is only needed to build the example's ArkTS side. Run
+`git submodule sync --recursive` and `git submodule update --init --recursive`
+before building the example. Use `ohpm-rs install --all` in `example/ohos` to
+resolve the source packages' `workspace:*` dependencies.
 
-The pinned Ability revision uses published ArkUI `0.4.2`, XComponent `0.5.2`,
+Ability `1.0.0-beta.3` uses published ArkUI `0.4.2`, XComponent `0.5.2`,
 and IME `0.3.1` bindings. GPUI enables Ability's `keyboard`, `mouse`, and `drag`
 features for hardware key delivery, native mouse cancellation, and file drag/drop.
 Ability's `mouse` feature forwards XComponent's `api-18`, so GPUI uses Ability's
 re-exported XComponent types without a direct XComponent binding dependency.
 The crate and example need no crates.io patches or neighboring local binding checkout.
+
+Ability's ArkTS clipboard and notification plugins require explicit protocol
+configuration. The example sets `ClipboardPlugin.metadataMimeType` to
+`application/x-gpui-ohos-text-metadata-v1` and `NotificationPlugin.scheme` to
+`gpui-notification`, matching the backend's notification response URI handling.
+Keep these values consistent when configuring a consuming application's plugins.
 
 ## Touch input and rendering
 
@@ -76,8 +86,8 @@ path and do not link NativeVSync.
 
 [`example`](./example) exercises GPUI windows, scrolling, menus, file pickers,
 clipboard, credentials, screen capture, notifications, appearance, system state,
-and application lifecycle on OpenHarmony. Its native module uses the locally
-initialized `openharmony-ability` submodule for the new bridge plugins.
+and application lifecycle on OpenHarmony. Its native module and ArkTS entry use
+published Rust plugins and the matching ArkTS bridge plugin sources.
 
 ```bash
 cd example

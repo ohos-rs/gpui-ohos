@@ -406,147 +406,6 @@ export interface AboutMetadataData {
   website?: string
 }
 
-export interface AvailableArea {
-  left: number
-  top: number
-  width: number
-  height: number
-}
-
-export interface DismissNotificationRequest {
-  tag: string
-}
-
-export interface DisplaySnapshot {
-  id: number
-  width: number
-  height: number
-  densityPixels: number
-  availableArea?: AvailableArea
-  isDefault: boolean
-}
-
-export interface GetAvailableAreaRequest {
-
-}
-
-export interface GetAvailableAreaResponse {
-  area: AvailableArea
-}
-
-export interface GetBundleCodeDirRequest {
-
-}
-
-export interface GetBundleCodeDirResponse {
-  path: string
-}
-
-export interface GetDisplaysRequest {
-
-}
-
-export interface GetDisplaysResponse {
-  displays: Array<DisplaySnapshot>
-}
-
-export interface GetThermalLevelRequest {
-
-}
-
-export interface GetThermalLevelResponse {
-  level: number
-}
-
-export interface MenuAcknowledgement {
-  accepted: boolean
-}
-
-export interface MenuClickEvent {
-  menuId: string
-  windowId?: string
-}
-
-export interface MenuItemData {
-  id: string
-  type: string
-  text?: string
-  enabled?: boolean
-  accelerator?: string
-  predefinedType?: string
-  checked?: boolean
-  icon?: string
-  nativeIcon?: string
-  submenuItems?: Array<MenuItemData>
-  aboutMetadata?: AboutMetadataData
-}
-
-export interface MenuOpenEvent {
-  windowId: string
-}
-
-export interface MenuPopupRequest {
-  /** Serialized `Vec<MenuItemData>` JSON. */
-  jsonData: string
-  x?: number
-  y?: number
-  windowId: string
-}
-
-export interface MenuPredefinedRequest {
-  action: string
-  windowId?: string
-}
-
-export interface MenuSetMenubarRequest {
-  /** Serialized `Vec<MenuItemData>` JSON. */
-  jsonData: string
-  windowId: string
-}
-
-export interface MenuSetVisibleRequest {
-  visible: boolean
-  windowId: string
-}
-
-export interface NotificationAcknowledgement {
-  accepted: boolean
-}
-
-export interface NotificationAction {
-  id: string
-  label: string
-}
-
-export interface ShowNotificationRequest {
-  tag: string
-  title: string
-  body: string
-  actions: Array<NotificationAction>
-}
-
-/**
-  * 0..7 correspond to `thermal.ThermalLevel`. `kind` is thermal, sleep, wake,
-  * available-area, or displays.
-  */
-export interface SystemStateChangedEvent {
-  kind: string
-  thermalLevel?: number
-  availableArea?: AvailableArea
-  displays?: Array<DisplaySnapshot>
-}
-
-export interface AboutMetadataData {
-  name?: string
-  version?: string
-  shortVersion?: string
-  authors?: Array<string>
-  comments?: string
-  copyright?: string
-  license?: string
-  website?: string
-}
-
 export interface MenuAcknowledgement {
   accepted: boolean
 }
@@ -618,6 +477,15 @@ export interface CursorVisibleRequest {
     * (not per-window), so this request deliberately carries no window id.
     */
   visible: boolean
+}
+
+export interface CustomCursorRequest {
+  windowId: number
+  rgba: Array<number>
+  width: number
+  height: number
+  hotspotX: number
+  hotspotY: number
 }
 
 export interface DecorationFlagsRequest {
@@ -709,6 +577,13 @@ export interface WindowFullscreenRequest {
   on: boolean
 }
 
+/** Main Ability window/task icon. An empty image restores the packaged Ability icon. */
+export interface WindowIconRequest {
+  windowId: number
+  rgba: Array<number>
+  size: number
+}
+
 export interface WindowIdRequest {
   windowId: number
 }
@@ -733,7 +608,9 @@ export interface WindowMoveRequest {
 }
 
 export interface WindowPromptAnchor {
+  /** Horizontal position in the target window's content, in logical vp units. */
   x: number
+  /** Vertical position in the target window's content, in logical vp units. */
   y: number
 }
 
@@ -745,7 +622,7 @@ export interface WindowPromptRequest {
   level: number
   buttons: Array<string>
   cancelIndex?: number
-  /** Optional content-local logical position for an anchored window menu. */
+  /** Optional content-local position in logical vp units, not physical px or screen coordinates. */
   anchor?: WindowPromptAnchor
 }
 
@@ -785,25 +662,6 @@ export interface WindowTopmostRequest {
 export interface WindowTouchableRequest {
   windowId: number
   touchable: boolean
-}
-
-export interface CredentialAcknowledgement {
-  accepted: boolean
-}
-
-export interface CredentialKeyRequest {
-  alias: string
-}
-
-export interface CredentialReadResponse {
-  username?: string
-  password?: Array<number>
-}
-
-export interface CredentialWriteRequest {
-  alias: string
-  username: string
-  password: Array<number>
 }
 
 /** Request to hide the application's UIAbility (fire-and-forget). */
