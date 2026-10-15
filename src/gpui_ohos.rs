@@ -7,4 +7,6 @@
 mod ohos;
 
 pub use gpui::*;
+#[cfg(feature = "native-vsync")]
+pub use ohos::configure_native_refresh;
 pub use ohos::current_platform;

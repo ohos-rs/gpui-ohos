@@ -224,6 +224,17 @@ fn apply_menu_validation(items: &mut [MenuItemData], enabled: &HashMap<String, b
     changed
 }
 
+fn scope_menu_items(items: &mut [MenuItemData], window_id: i64) {
+    for item in items {
+        // The pinned menu bridge forwards only menu_id, discarding window_id.
+        // Keep the origin in the identifier across that boundary.
+        item.id = format!("window-{window_id}:{}", item.id);
+        if let Some(children) = item.submenu_items.as_mut() {
+            scope_menu_items(children, window_id);
+        }
+    }
+}
+
 fn menu_items(
     items: &[OwnedMenuItem],
     state: &mut MenuState,
@@ -585,10 +596,21 @@ impl OhosPlatform {
         let Some(app) = self.app.borrow().clone() else {
             return;
         };
-        let json_data = self.menus.borrow().json.clone();
-        if json_data.is_empty() {
+        let json = self.menus.borrow().json.clone();
+        if json.is_empty() {
             return;
         }
+        let json_data =
+            match serde_json::from_str::<Vec<MenuItemData>>(&json).and_then(|mut items| {
+                scope_menu_items(&mut items, window_id);
+                serde_json::to_string(&items)
+            }) {
+                Ok(json) => json,
+                Err(error) => {
+                    warn!("Failed to scope OHOS menu to window {window_id}: {error}");
+                    return;
+                }
+            };
         self.background_executor
             .spawn(async move {
                 let result = async {
@@ -615,16 +637,47 @@ impl OhosPlatform {
         loop {
             let id = self.menu_events.lock().unwrap().pop_front();
             let Some(id) = id else { break };
+            let (window_id, action_id) =
+                match id.strip_prefix("window-").and_then(|id| id.split_once(':')) {
+                    Some((window, action)) => match window.parse::<i64>() {
+                        Ok(window) => (Some(window), action),
+                        Err(_) => {
+                            warn!("Invalid OHOS menu window {id}");
+                            continue;
+                        }
+                    },
+                    None => (None, id.as_str()),
+                };
             let action = self
                 .menus
                 .borrow()
                 .actions
-                .get(&id)
+                .get(action_id)
                 .map(|action| action.boxed_clone());
             let Some(action) = action else {
                 warn!("Unknown OHOS menu item {id}");
                 continue;
             };
+            if let Some(window_id) = window_id {
+                let windows = self
+                    .windows
+                    .borrow()
+                    .iter()
+                    .filter_map(Weak::upgrade)
+                    .collect::<Vec<_>>();
+                if !windows
+                    .iter()
+                    .any(|window| window.borrow().window_id() == window_id)
+                {
+                    continue;
+                }
+                for window in windows {
+                    window.borrow().handle_event(&Event::WindowFocusChanged {
+                        window_id,
+                        focused: true,
+                    });
+                }
+            }
             log::info!("Dispatching OHOS menu action {id}");
             let mut on_action = self.menus.borrow_mut().on_action.take();
             if let Some(ref mut callback) = on_action {

@@ -53,6 +53,25 @@ cargo test --manifest-path tests/touch/Cargo.toml --locked
 cargo clippy --manifest-path tests/touch/Cargo.toml --locked --all-targets --no-deps -- -D warnings
 ```
 
+## Optional native refresh requests
+
+Enable the `native-vsync` Cargo feature to let the embedding application request
+a rendering rate through `ohos-vsync-binding` 0.3.1. Receiver ownership, one-shot
+callback lifetime, rate changes and destruction use that wrapper. The backend
+does not declare NativeVSync FFI or depend directly on its sys crate.
+
+The application requests a rate with `configure_native_refresh(window_id,
+associated_window, Some(hz))` on the UI thread. `window_id` is GPUI's Ability
+window identifier; `associated_window` is the OS window ID. Choose `hz` from
+the actual display's supported rates. Passing `None` releases the request.
+
+There is no fixed refresh-rate target. Only one delivery source owns a window
+at a time; hidden or idle windows release their NativeVSync receiver. Native
+callbacks return to the owning UI thread, and generation tokens discard late
+callbacks after teardown. Missing native rate APIs or receiver failures fall
+back to XComponent delivery. Builds without the feature retain that delivery
+path and do not link NativeVSync.
+
 ## Example
 
 [`example`](./example) exercises GPUI windows, scrolling, menus, file pickers,
