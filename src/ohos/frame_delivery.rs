@@ -299,11 +299,11 @@ impl WindowFrames {
 
     #[cfg(feature = "native-vsync")]
     pub(crate) fn on_native_callback(self: &Rc<Self>, token: usize) {
-        if !self
+        if self
             .native
             .borrow()
             .as_ref()
-            .is_some_and(|native| native.token() == token)
+            .is_none_or(|native| native.token() != token)
         {
             return;
         }

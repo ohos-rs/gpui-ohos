@@ -1833,11 +1833,9 @@ impl OhosWindow {
             }
             Event::Start => self.update_visibility(WindowVisibility::Visible),
             Event::Stop => self.update_visibility(WindowVisibility::Hidden),
-            Event::WindowRedraw(_) => {
-                if !self.frames.native_delivering() {
-                    self.frames.on_callback();
-                    self.draw_requested_frame(Instant::now());
-                }
+            Event::WindowRedraw(_) if !self.frames.native_delivering() => {
+                self.frames.on_callback();
+                self.draw_requested_frame(Instant::now());
             }
             Event::Input(input_event) => {
                 self.handle_input_event(input_event);
