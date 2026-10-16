@@ -11,6 +11,5 @@ cargo clippy --manifest-path tests/path-targets/Cargo.toml --locked --all-target
 cargo fmt --manifest-path tests/path-targets/Cargo.toml --check
 ```
 
-This requires a Metal adapter. GLES correctness was separately checked with
-overlapping curved paths on an OHOS phone; see the
-[memory measurement and first-use cost](../../docs/path-target-memory-2026-10-13.md).
+This requires a Metal adapter. Real-device GLES checks are still needed for
+OHOS integration.

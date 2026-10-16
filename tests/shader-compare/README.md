@@ -19,5 +19,4 @@ The reference is supplied explicitly so a candidate cannot silently update its
 own expected shader. Input records match the production vertex attribute layout.
 
 This is an offscreen correctness check, not an OHOS performance measurement or a
-substitute for real-device GLES checks. The October 13 device comparison also
-checks static screenshots and exercises scrolling with the actual GLES driver.
+substitute for real-device GLES checks.

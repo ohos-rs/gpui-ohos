@@ -1,12 +1,8 @@
 # OHOS adaptation performance
 
-The optimization preserves the existing platform APIs, raw touch and ArkUI Pan
-streams, system velocity, animation frame rate, presentation mode, antialiasing,
-window count, pixel formats and the existing capture size guard. GPUI core is
-unchanged at `f45c7c22d0`.
-
-The rendering-cost follow-up and cross-platform comparison are recorded in
-[the October 13 measurements](render-performance-2026-10-13.md).
+The OHOS backend manages task execution, frame demand and rendering resources
+without changing GPUI core. See [touch input and frame scheduling](touch-input.md)
+for gesture ownership and lifecycle details.
 
 ## Runtime ownership
 
@@ -49,9 +45,7 @@ The rendering-cost follow-up and cross-platform comparison are recorded in
   continuous callbacks enabled without repeated attempts until surface
   destruction. Each operation warns only once per window.
 - After successful idle unregistration, frame callbacks and frame timers stop;
-  foreground tasks and input can still wake the application. Simulator runs
-  observed idle callbacks and CPU near zero, with demand-to-draw latency p50
-  around 8 ms and no observed regression in scrolling cadence.
+  foreground tasks and input can still wake the application.
 - The window index routes borrowed input directly to its owner. Global events
   still reach every live window. `SmallVec` has four inline entries and grows
   on the heap; four is not a window limit. Resize callbacks are deduplicated
@@ -66,21 +60,23 @@ The rendering-cost follow-up and cross-platform comparison are recorded in
   contiguous run, preserving scene order, clipping, blending and antialiasing.
   Resolved multisample path attachments use `StoreOp::Discard`; sample count
   and resolution are unchanged.
+- Quads, shadows and underlines with integral content masks shrink their vertex
+  geometry to the mask while preserving shape bounds and fragment clipping.
+  Fractional masks retain their original geometry to preserve pixel output.
+- The six ordinary scene instance arrays share one `Queue::write_buffer_with`
+  allocation and transfer, preserving alignment, strides and primitive order.
+  Empty and paths-only scenes skip this transfer; path rasterization uploads
+  retain their separate handling.
 - Windows allocate path attachments on first path use, reuse them across frames,
   and invalidate them on resize. Windows that never draw paths avoid these
-  full-size textures; see [memory measurements and first-use cost](path-target-memory-2026-10-13.md).
+  full-size textures. Allocation occurs on first path use and again after resize;
+  path-free frames retain existing attachments.
 - `WgpuContext` owns common shader/layout handles and caches pipelines by surface
   format, alpha mode, path sample count and dual-source blending. Window buffers,
   uniforms and surface textures retain their existing ownership; atlas reuse
   uses compatible layouts from the same device. No rendering quality changes.
 - Capture copies and converts one row at a time instead of zeroing and rescanning
   a complete frame. RGBA, RGBX, BGRA and BGRX retain their channel/alpha semantics.
-
-Ability branch `feat/pr82-nearsend-integration` at `ab1d6c20` supplies frame
-delivery selection and releases native consumers before dropping their ArkUI
-root. The earlier reverse order caused a reproduced multiwindow close crash.
-The SDK contains only OHOS implementations; target-platform fallback branches
-were removed without changing the native frame callback body or device classes.
 
 ## Verification
 
@@ -98,12 +94,12 @@ cargo fmt --manifest-path tests/touch/Cargo.toml --check
 (cd example && cargo check --locked --target aarch64-unknown-linux-ohos)
 ```
 
-74 host regressions cover gestures, callback demand and registration failure
+Host regressions cover gestures, callback demand and registration failure
 recovery, presentation retry and lifecycle demand, unavailable surfaces without
 idle retries, viewport deduplication, wake coalescing, timers, blocking background
 tasks, worker limits, monitor backoff, priority fairness, shutdown, cache
-variants, quad pipeline eligibility and pixel conversion. `FrameDemand` has 20
-regressions, including fallback coalescing, demand during fallback, successful
+variants, quad pipeline eligibility and pixel conversion. `FrameDemand`
+regressions include fallback coalescing, demand during fallback, successful
 registration, unexpected callbacks, hiding and surface destruction.
 
 Host tests and target compilation do not establish native callback safety or
@@ -111,12 +107,5 @@ real-device power use. Simulator checks should cover first frames, main/child
 window independence, hide/restore, surface recreation, scrolling, registration
 failure recovery and continuous-callback degradation after failed unregistration.
 
-The following measurements cover other retained runtime/rendering optimizations:
-
-| Case | Before | Optimized |
-| --- | ---: | ---: |
-| Compatible pipeline sets for main + 3 child windows | 4 | 1 |
-| Worker thread IDs for 2,064 cooperative continuations (host) | 2,064 | 8 |
-| Median dispatcher duration for that workload (host) | 31.893 ms | 2.616 ms |
-
-Host timings must not be interpreted as an OHOS speedup.
+Rendering checks are documented in the [path target GPU regression](../tests/path-targets/README.md)
+and [shader pixel comparison](../tests/shader-compare/README.md) harnesses.
