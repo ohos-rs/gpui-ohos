@@ -1,5 +1,26 @@
 // Native wake and the main queue are host shims; GPUI futures and production queues are real.
+#[cfg(test)]
+extern crate self as napi_ohos;
 extern crate self as openharmony_ability;
+#[cfg(test)]
+#[path = "support/frame_delivery.rs"]
+mod frame_delivery_support;
+#[cfg(test)]
+pub use frame_delivery_support::{Error, FrameInputDelivery, OpenHarmonyApp};
+#[cfg(test)]
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+#[cfg(all(test, feature = "native-vsync"))]
+use frame_delivery_support::native_frames;
+#[cfg(test)]
+use frame_delivery_support::window;
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../src/ohos/frame_delivery.rs"]
+mod frame_delivery;
+#[cfg(all(test, feature = "native-vsync"))]
+#[allow(dead_code)]
+#[path = "../../src/ohos/native_refresh.rs"]
+mod native_refresh;
 pub use gpui::{Pixels, PlatformDispatcher, Priority, RunnableVariant, Size};
 use std::sync::{
     Arc,

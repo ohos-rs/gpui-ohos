@@ -23,6 +23,7 @@ mod capabilities_demo;
 mod ime_demo;
 
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local, reason = "The initializer is const; OHOS std TLS expansion triggers this lint.")]
     static APPLICATION: RefCell<Option<ApplicationHandle>> = const { RefCell::new(None) };
 }
 
@@ -47,6 +48,8 @@ impl ChildWindowState {
 }
 
 struct CaptureDemo {
+    #[cfg(feature = "native-vsync")]
+    native_frames_requested: bool,
     capabilities: gpui_ohos::Entity<capabilities_demo::CapabilitiesDemo>,
     ime: gpui_ohos::Entity<ime_demo::ImeDemo>,
     app: OpenHarmonyApp,
@@ -336,6 +339,44 @@ impl Render for CaptureDemo {
             )
             .text_color(rgb(if dark { 0xf4f4f5 } else { 0x18181b }))
             .child("Hello, GPUI on OpenHarmony!")
+            .child({
+                #[cfg(feature = "native-vsync")]
+                {
+                    div()
+                        .id("switch-frame-source")
+                        .p_4()
+                        .bg(rgb(0x0d9488))
+                        .child(format!(
+                            "Frame source request: {} (click to switch)",
+                            if self.native_frames_requested {
+                                "NativeVSync"
+                            } else {
+                                "XComponent"
+                            }
+                        ))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let native = !this.native_frames_requested;
+                            let hz = native.then(|| this.app.refresh_rate());
+                            match gpui_ohos::configure_native_refresh(0, 0, hz) {
+                                Ok(()) => {
+                                    this.native_frames_requested = native;
+                                    log::info!(
+                                        "GPUI frame source request: {} rate={hz:?}",
+                                        if native { "NativeVSync" } else { "XComponent" }
+                                    );
+                                }
+                                Err(error) => {
+                                    log::error!("GPUI frame source request failed: {error}")
+                                }
+                            }
+                            cx.notify();
+                        }))
+                }
+                #[cfg(not(feature = "native-vsync"))]
+                {
+                    div()
+                }
+            })
             .child(self.capabilities.clone())
             .child(self.ime.clone())
             .child(format!("Appearance: {}", self.appearance_status))
@@ -786,6 +827,8 @@ fn openharmony_app(app: OpenHarmonyApp) {
             |_, cx| {
                 let ime = cx.new(ime_demo::ImeDemo::new);
                 let view = cx.new(|cx| CaptureDemo {
+                    #[cfg(feature = "native-vsync")]
+                    native_frames_requested: false,
                     capabilities: cx
                         .new(|_| capabilities_demo::CapabilitiesDemo::new(inner_app.clone())),
                     ime,

@@ -6,6 +6,9 @@ publish = false
 
 [workspace]
 
+[features]
+native-vsync = []
+
 [dependencies]
 gpui = { git = "https://github.com/ohos-rs/zed.git", rev = "f45c7c22d0", default-features = false }
 rustc-hash = "2"
