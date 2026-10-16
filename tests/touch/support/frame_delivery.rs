@@ -23,8 +23,8 @@ pub enum FrameInputDelivery {
 #[derive(Default)]
 pub(crate) struct FrameState {
     pub(crate) xcomponent: Cell<bool>,
-    pub(crate) changes: Cell<usize>,
     pub(crate) callback_active: Rc<Cell<bool>>,
+    pub(crate) fail_delivery: Cell<bool>,
     #[cfg(feature = "native-vsync")]
     pub(crate) native_count: Cell<usize>,
     #[cfg(feature = "native-vsync")]
@@ -32,11 +32,11 @@ pub(crate) struct FrameState {
     #[cfg(feature = "native-vsync")]
     pub(crate) requests: Cell<usize>,
     #[cfg(feature = "native-vsync")]
+    pub(crate) creations: Cell<usize>,
+    #[cfg(feature = "native-vsync")]
     pub(crate) fail_create: Cell<bool>,
     #[cfg(feature = "native-vsync")]
     pub(crate) fail_request: Cell<bool>,
-    #[cfg(feature = "native-vsync")]
-    pub(crate) fail_switch: Cell<bool>,
 }
 
 #[derive(Clone, Default)]
@@ -52,24 +52,29 @@ impl OpenHarmonyApp {
             !self.0.callback_active.get(),
             "registration inside callback"
         );
-        #[cfg(feature = "native-vsync")]
-        if self.0.fail_switch.replace(false) {
+        if self.0.fail_delivery.replace(false) {
             return Err(Error);
         }
-        let enabled = delivery == FrameInputDelivery::Continuous;
         #[cfg(feature = "native-vsync")]
-        assert!(
-            !enabled || self.0.native_count.get() == 0,
-            "two frame sources"
+        assert_eq!(
+            delivery,
+            FrameInputDelivery::OnDemand,
+            "XComponent enabled in NativeVSync build"
         );
-        self.0.xcomponent.set(enabled);
-        self.0.changes.set(self.0.changes.get() + 1);
+        self.0
+            .xcomponent
+            .set(delivery == FrameInputDelivery::Continuous);
         Ok(())
     }
 
     #[cfg(feature = "native-vsync")]
     pub(crate) fn main_thread(&self) -> crate::Result<Rc<FrameState>> {
         Ok(self.0.clone())
+    }
+
+    #[cfg(feature = "native-vsync")]
+    pub(crate) fn refresh_rate(&self) -> u32 {
+        120
     }
 }
 
@@ -96,7 +101,7 @@ pub(crate) mod window {
 #[cfg(feature = "native-vsync")]
 pub(crate) mod native_frames {
     use super::*;
-    use crate::{frame_delivery::WindowFrames, native_refresh::NativeRefresh};
+    use crate::frame_delivery::WindowFrames;
 
     pub(crate) fn register(_frames: &Rc<WindowFrames>) {}
 
@@ -106,13 +111,10 @@ pub(crate) mod native_frames {
     }
 
     impl NativeFrames {
-        pub(crate) fn new(
-            _target: NativeRefresh,
-            _window_id: i64,
-            state: Rc<FrameState>,
-        ) -> crate::Result<Self> {
+        pub(crate) fn new(_window_id: i64, _hz: u32, state: Rc<FrameState>) -> crate::Result<Self> {
             assert!(!state.callback_active.get());
             assert!(!state.xcomponent.get(), "two frame sources");
+            state.creations.set(state.creations.get() + 1);
             if state.fail_create.get() {
                 return Err(Error);
             }
@@ -159,7 +161,7 @@ mod tests {
         frame_delivery::{FrameCallbackScope, WindowFrames},
         frame_demand::IDLE_CALLBACK_THRESHOLD,
     };
-    use gpui::{BackgroundExecutor, ForegroundExecutor};
+    use gpui::ForegroundExecutor;
     use std::{sync::Arc, time::Duration};
 
     struct Driver {
@@ -172,14 +174,16 @@ mod tests {
 
     impl Driver {
         fn new() -> Self {
-            let app = OpenHarmonyApp::default();
+            Self::with_app(OpenHarmonyApp::default())
+        }
+
+        fn with_app(app: OpenHarmonyApp) -> Self {
             let (sender, queue) = PriorityQueueReceiver::new();
             let dispatcher = Arc::new(OhosDispatcher::new(sender));
             let frames = WindowFrames::new(
                 0,
                 Rc::new(RefCell::new(Some(app.clone()))),
                 ForegroundExecutor::new(dispatcher.clone()),
-                BackgroundExecutor::new(dispatcher.clone()),
                 app.0.callback_active.clone(),
             );
             let window = Rc::new(RefCell::new(window::OhosWindow::default()));
@@ -206,15 +210,17 @@ mod tests {
         }
 
         #[cfg(feature = "native-vsync")]
-        fn select_native(&self, hz: u32) {
-            self.frames.set_native_refresh(Some(
-                crate::native_refresh::NativeRefresh::new(7, hz).unwrap(),
-            ));
-        }
-
-        #[cfg(feature = "native-vsync")]
         fn tick(&self) {
             self.frames.on_native_callback(self.app.0.token.get());
+        }
+
+        #[cfg(not(feature = "native-vsync"))]
+        fn tick(&self) {
+            let _scope = FrameCallbackScope::enter(self.app.0.callback_active.clone());
+            self.frames.on_xcomponent_callback();
+            self.window
+                .borrow()
+                .draw_requested_frame(std::time::Instant::now());
         }
     }
 
@@ -226,14 +232,13 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "native-vsync"))]
     #[test]
-    fn xcomponent_remains_default_and_unregisters_after_idle_callbacks() {
+    fn xcomponent_build_unregisters_after_idle_callbacks() {
         let driver = Driver::new();
         assert!(driver.app.0.xcomponent.get());
-        assert_eq!(driver.window.borrow().draws.get(), 0);
         for _ in 0..=IDLE_CALLBACK_THRESHOLD {
-            let _scope = FrameCallbackScope::enter(driver.app.0.callback_active.clone());
-            assert!(driver.frames.on_xcomponent_callback());
+            driver.tick();
         }
         assert!(driver.app.0.xcomponent.get());
         driver.flush();
@@ -242,101 +247,124 @@ mod tests {
         assert!(driver.app.0.xcomponent.get());
     }
 
+    #[cfg(not(feature = "native-vsync"))]
     #[test]
-    fn hide_inside_callback_defers_native_registration_changes() {
+    fn failed_xcomponent_registration_waits_for_new_demand() {
+        let app = OpenHarmonyApp::default();
+        app.0.fail_delivery.set(true);
+        let driver = Driver::with_app(app);
+        driver.flush();
+        assert!(!driver.app.0.xcomponent.get());
+        assert_eq!(driver.window.borrow().draws.get(), 0);
+        driver.frames.request();
+        assert!(driver.app.0.xcomponent.get());
+    }
+
+    #[test]
+    fn hide_inside_callback_defers_delivery_cleanup() {
         let driver = Driver::new();
         {
             let _scope = FrameCallbackScope::enter(driver.app.0.callback_active.clone());
             driver.frames.set_active(false, true);
+            #[cfg(not(feature = "native-vsync"))]
             assert!(driver.app.0.xcomponent.get());
+            #[cfg(feature = "native-vsync")]
+            assert_eq!(driver.app.0.native_count.get(), 1);
         }
         driver.flush();
         assert!(!driver.app.0.xcomponent.get());
+        #[cfg(feature = "native-vsync")]
+        assert_eq!(driver.app.0.native_count.get(), 0);
     }
 
     #[cfg(feature = "native-vsync")]
     #[test]
-    fn switches_sources_outside_callbacks_and_ignores_old_source_events() {
+    fn native_build_starts_without_runtime_configuration() {
         let driver = Driver::new();
-        {
-            let _scope = FrameCallbackScope::enter(driver.app.0.callback_active.clone());
-            driver.select_native(120);
-            driver.frames.request();
-            assert!(driver.app.0.xcomponent.get());
-            assert_eq!(driver.app.0.native_count.get(), 0);
-        }
-        driver.flush();
         assert!(!driver.app.0.xcomponent.get());
         assert_eq!(driver.app.0.native_count.get(), 1);
-        assert!(!driver.frames.on_xcomponent_callback());
         driver.tick();
-        assert_eq!(driver.window.borrow().draws.get(), 1);
-        let token = driver.app.0.token.get();
-        driver.frames.set_native_refresh(None);
-        driver.flush();
-        assert!(driver.app.0.xcomponent.get());
-        assert_eq!(driver.app.0.native_count.get(), 0);
-        driver.frames.on_native_callback(token);
         assert_eq!(driver.window.borrow().draws.get(), 1);
     }
 
     #[cfg(feature = "native-vsync")]
     #[test]
-    fn unavailable_native_receiver_falls_back_without_repeated_creation() {
-        let driver = Driver::new();
-        driver.app.0.fail_create.set(true);
-        driver.select_native(120);
+    fn failed_native_creation_does_not_start_xcomponent_or_retry_without_demand() {
+        let app = OpenHarmonyApp::default();
+        app.0.fail_create.set(true);
+        let driver = Driver::with_app(app);
         driver.flush();
-        assert!(driver.app.0.xcomponent.get());
+        assert!(!driver.app.0.xcomponent.get());
         assert_eq!(driver.app.0.native_count.get(), 0);
+        assert_eq!(driver.app.0.creations.get(), 1);
+        assert_eq!(driver.window.borrow().draws.get(), 0);
         driver.app.0.fail_create.set(false);
         driver.frames.request();
-        driver.flush();
-        assert_eq!(driver.app.0.native_count.get(), 0);
-        driver.select_native(90);
-        driver.flush();
         assert_eq!(driver.app.0.native_count.get(), 1);
+        assert_eq!(driver.app.0.creations.get(), 2);
     }
 
     #[cfg(feature = "native-vsync")]
     #[test]
-    fn failed_xcomponent_unregistration_never_starts_a_second_source() {
-        let driver = Driver::new();
-        driver.app.0.fail_switch.set(true);
-        driver.select_native(120);
+    fn failed_xcomponent_deactivation_does_not_start_native_receiver() {
+        let app = OpenHarmonyApp::default();
+        app.0.fail_delivery.set(true);
+        let driver = Driver::with_app(app);
         driver.flush();
-        assert!(driver.app.0.xcomponent.get());
         assert_eq!(driver.app.0.native_count.get(), 0);
+        assert_eq!(driver.app.0.creations.get(), 0);
         driver.frames.request();
-        assert!(!driver.app.0.xcomponent.get());
         assert_eq!(driver.app.0.native_count.get(), 1);
     }
 
     #[cfg(feature = "native-vsync")]
     #[test]
-    fn failed_native_rearm_returns_to_xcomponent() {
+    fn failed_native_rearm_releases_receiver_without_switching_sources() {
         let driver = Driver::new();
-        driver.select_native(120);
-        driver.flush();
         driver.app.0.fail_request.set(true);
         driver.tick();
+        assert_eq!(driver.app.0.native_count.get(), 1);
         driver.flush();
-        assert!(driver.app.0.xcomponent.get());
+        assert!(!driver.app.0.xcomponent.get());
         assert_eq!(driver.app.0.native_count.get(), 0);
+        assert_eq!(driver.app.0.creations.get(), 1);
+        driver.frames.request();
+        assert_eq!(driver.app.0.native_count.get(), 1);
+    }
+
+    #[cfg(feature = "native-vsync")]
+    #[test]
+    fn demand_during_failed_native_frame_restarts_after_callback_cleanup() {
+        let driver = Driver::new();
+        let old_token = driver.app.0.token.get();
+        let frames = Rc::downgrade(&driver.frames);
+        *driver.window.borrow().on_draw.borrow_mut() = Some(Box::new(move || {
+            frames.upgrade().unwrap().request();
+        }));
+        driver.app.0.fail_request.set(true);
+        driver.tick();
+        assert_eq!(driver.app.0.native_count.get(), 1);
+        assert_eq!(driver.app.0.creations.get(), 1);
+        driver.window.borrow().on_draw.borrow_mut().take();
+        driver.flush();
+        assert_eq!(driver.app.0.native_count.get(), 1);
+        assert_eq!(driver.app.0.creations.get(), 2);
+        assert!(!driver.app.0.xcomponent.get());
+        driver.frames.on_native_callback(old_token);
+        assert_eq!(driver.window.borrow().draws.get(), 1);
+        driver.tick();
+        assert_eq!(driver.window.borrow().draws.get(), 2);
     }
 
     #[cfg(feature = "native-vsync")]
     #[test]
     fn idle_threshold_draw_can_request_another_native_frame() {
         let driver = Driver::new();
-        driver.select_native(120);
-        driver.flush();
         let frames = Rc::downgrade(&driver.frames);
         let state = driver.app.0.clone();
         let draws = Cell::new(0);
         *driver.window.borrow().on_draw.borrow_mut() = Some(Box::new(move || {
             draws.set(draws.get() + 1);
-            // The next callback must be armed before the draw starts.
             assert_eq!(state.requests.get(), draws.get() + 1);
             if draws.get() == IDLE_CALLBACK_THRESHOLD + 1 {
                 frames.upgrade().unwrap().request();
@@ -362,8 +390,6 @@ mod tests {
     #[test]
     fn hiding_and_surface_recreation_reject_queued_native_callbacks() {
         let driver = Driver::new();
-        driver.select_native(120);
-        driver.flush();
         let old_token = driver.app.0.token.get();
         driver.frames.set_active(false, false);
         assert_eq!(driver.app.0.native_count.get(), 0);

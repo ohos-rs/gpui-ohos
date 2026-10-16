@@ -9,7 +9,6 @@ use ohos_vsync_binding::{OH_NativeVSync_ExpectedRateRange as ExpectedRateRange, 
 use openharmony_ability::MainThreadScheduler;
 
 use super::frame_delivery::WindowFrames;
-use super::native_refresh::{NativeRefresh, NativeRefreshError};
 
 thread_local! {
     #[allow(clippy::missing_const_for_thread_local, reason = "The initializer is const; OHOS std TLS expansion triggers this lint.")]
@@ -27,37 +26,6 @@ pub(crate) fn register(frames: &Rc<WindowFrames>) {
     });
 }
 
-/// Selects NativeVSync with `Some(hz)`, or XComponent callbacks with `None`.
-///
-/// Call on the embedding UI thread after the GPUI window has opened. `window_id`
-/// is the Ability window ID (0 for the main window); `associated_window` is the
-/// OS window ID, or 0 for an unassociated receiver. Choose `hz` from the display's
-/// supported rates. Native API or receiver failures fall back to XComponent.
-/// The change is applied asynchronously outside any frame callback.
-pub fn configure_native_refresh(
-    window_id: i64,
-    associated_window: u64,
-    hz: Option<u32>,
-) -> std::result::Result<(), NativeRefreshError> {
-    let target = hz
-        .map(|hz| NativeRefresh::new(associated_window, hz))
-        .transpose()?;
-    let frames = WINDOWS.with_borrow(|windows| {
-        windows
-            .iter()
-            .filter_map(Weak::upgrade)
-            .find(|frames| frames.window_id() == window_id)
-    });
-    match frames {
-        Some(frames) => {
-            frames.set_native_refresh(target);
-            Ok(())
-        }
-        None if hz.is_none() => Ok(()),
-        None => Err(NativeRefreshError::WindowUnavailable(window_id)),
-    }
-}
-
 static NEXT_TOKEN: AtomicUsize = AtomicUsize::new(1);
 
 /// The binding owns the receiver and its callback liveness gate. A generation
@@ -70,36 +38,13 @@ pub(crate) struct NativeFrames {
 }
 
 impl NativeFrames {
-    pub(crate) fn new(
-        target: NativeRefresh,
-        window_id: i64,
-        main_thread: MainThreadScheduler,
-    ) -> Result<Self> {
-        // Probe optional rate support before calling the binding on older runtimes.
-        let setter = unsafe {
-            libc::dlsym(
-                libc::RTLD_DEFAULT,
-                c"OH_NativeVSync_SetExpectedFrameRateRange".as_ptr(),
-            )
-        };
-        if setter.is_null() {
-            return Err(Error::from_reason(
-                "NativeVSync rate requests require API 20",
-            ));
-        }
-        let associated = unsafe {
-            libc::dlsym(
-                libc::RTLD_DEFAULT,
-                c"OH_NativeVSync_Create_ForAssociatedWindow".as_ptr(),
-            )
-        };
-        let vsync = if target.window_id != 0 && !associated.is_null() {
-            Vsync::try_new_for_associated_window(target.window_id, "gpui-native-render")
-        } else {
-            Vsync::try_new("gpui-native-render")
-        }
-        .ok_or_else(|| Error::from_reason("NativeVSync creation failed"))?;
-        let hz = target.hz;
+    pub(crate) fn new(window_id: i64, hz: u32, main_thread: MainThreadScheduler) -> Result<Self> {
+        let hz = i32::try_from(hz)
+            .ok()
+            .filter(|hz| *hz > 0)
+            .ok_or_else(|| Error::from_reason(format!("Invalid display refresh rate: {hz}")))?;
+        let vsync = Vsync::try_new("gpui-native-render")
+            .ok_or_else(|| Error::from_reason("NativeVSync creation failed"))?;
         let result = vsync.set_expected_frame_rate_range(ExpectedRateRange {
             min: hz,
             max: hz,

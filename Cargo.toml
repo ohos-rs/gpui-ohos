@@ -10,7 +10,6 @@ publish = false
 
 [workspace.dependencies]
 accesskit_ohos = { git = "https://github.com/richerfu/accesskit.git", rev = "ea2d8c4", features = ["api-15"] }
-libc = "0.2"
 anyhow = "1"
 bytemuck = "1"
 crossbeam-channel = "0.5"
@@ -83,7 +82,6 @@ font-kit.workspace = true
 futures.workspace = true
 itertools.workspace = true
 image.workspace = true
-libc.workspace = true
 log.workspace = true
 ohos-accessibility-binding.workspace = true
 ohos-asset-binding.workspace = true

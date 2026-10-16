@@ -20,14 +20,14 @@ Phone targets use the default configuration. For desktop or 2in1 targets:
 OHOS_DEVICE_TYPE=desktop sh scripts/build-native.sh --release
 ```
 
-To enable the runtime switch between NativeVSync and XComponent callbacks:
+To build with NativeVSync instead of XComponent callbacks:
 
 ```sh
 sh scripts/build-native.sh --release -- --locked --features native-vsync
 ```
 
-See [frame source configuration](../README.md#optional-nativevsync-delivery)
-for the embedding API.
+The app displays the frame source selected at build time. See
+[NativeVSync delivery](../README.md#optional-nativevsync-delivery) for details.
 
 ## Build the HAP
 

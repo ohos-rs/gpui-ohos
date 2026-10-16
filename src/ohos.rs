@@ -8,8 +8,6 @@ mod frame_demand;
 mod keyboard;
 #[cfg(feature = "native-vsync")]
 mod native_frames;
-#[cfg(feature = "native-vsync")]
-mod native_refresh;
 mod path_targets;
 mod platform;
 mod presentation;
@@ -29,10 +27,6 @@ mod window_state;
 mod worker_state;
 mod workers;
 
-#[cfg(feature = "native-vsync")]
-pub use native_frames::configure_native_refresh;
-#[cfg(feature = "native-vsync")]
-pub use native_refresh::NativeRefreshError;
 use openharmony_ability::OpenHarmonyApp;
 
 pub fn current_platform(app: OpenHarmonyApp, _headless: bool) -> std::rc::Rc<dyn gpui::Platform> {

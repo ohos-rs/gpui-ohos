@@ -26,30 +26,26 @@ for gesture ownership and lifecycle details.
 - `MainWake` coalesces foreground task wake events, including `UserEvent` while
   no frame callback is registered. Each window owns an independent `FrameDemand`
   state machine; main and child windows do not share frame demand.
-- XComponent is the default display frame source. Demand switches
+- The `native-vsync` Cargo feature selects NativeVSync for every window;
+  builds without it use XComponent callbacks. Each build uses one frame source.
+- With XComponent, demand switches
   `set_frame_input_delivery_for` to `FrameInputDelivery::Continuous`, registering
   the window's callback. After 12 consecutive callbacks without demand, it
   switches to `OnDemand` to unregister. Input callbacks stay registered. Startup,
   surface creation/recreation and becoming visible request a first frame.
-- The optional `native-vsync` feature allows per-window source selection through
-  [`configure_native_refresh`](../README.md#optional-nativevsync-delivery).
-  NativeVSync uses one-shot requests and re-arms before drawing on the UI thread.
-  Idle and lifecycle cleanup releases its receiver and rate request. Source
-  changes run outside callbacks; late native callbacks are rejected, and native
-  failures fall back to XComponent.
+- [NativeVSync](../README.md#optional-nativevsync-delivery) requests the system's
+  display refresh rate, uses one-shot requests, and re-arms before drawing on
+  the UI thread. Idle and lifecycle cleanup releases its receiver and rate
+  request. Receiver cleanup runs outside callbacks, and late native callbacks
+  are rejected.
 - Registration and unregistration run only on the UI thread. `FrameCallbackScope`
   covers native redraw delivery across all windows; changes requested inside
   that scope are coalesced into a later foreground task. Native redraw events
   never drain the foreground queue. Each callback draws with `Instant::now()`.
-- Failed registration with active demand schedules one fallback draw at least
-  16 ms later through the existing dispatcher timer and foreground executor.
-  Each window has at most one pending fallback. The draw consumes its demand;
-  only new demand retries registration and can schedule another delayed draw.
-  Successful registration cancels the fallback. Hiding, closing or destroying
-  the surface cancels it as well. Timer tasks and draw targets use weak
-  references to avoid retaining a window. Failed unregistration leaves
-  continuous callbacks enabled without repeated attempts until surface
-  destruction. Each operation warns only once per window.
+- Failed registration logs once per window and waits for new demand before
+  retrying the selected source. A failed NativeVSync request releases its receiver
+  outside callbacks. Failed XComponent unregistration leaves continuous callbacks
+  enabled without repeated attempts until surface destruction.
 - After successful idle unregistration, frame callbacks and frame timers stop;
   foreground tasks and input can still wake the application.
 - The window index routes borrowed input directly to its owner. Global events
@@ -98,7 +94,7 @@ cargo fmt --check
 ```
 
 OHOS device checks should cover first frames, main/child window independence,
-hide/restore, surface recreation, scrolling, registration failure recovery and
-switching between NativeVSync and XComponent callbacks. Verify actual NativeVSync
-delivery on hardware; simulators without the native rate API should continue
-rendering through XComponent.
+hide/restore, surface recreation, scrolling, and registration failures in both
+NativeVSync and XComponent builds. Verify actual NativeVSync
+delivery on hardware. NativeVSync builds require a runtime that provides the
+native rate API.

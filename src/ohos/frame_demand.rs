@@ -13,7 +13,6 @@ pub(crate) struct FrameDemand {
     idle_callbacks: usize,
     pending: Option<DeliveryChange>,
     unregister_failed: bool,
-    fallback_pending: bool,
 }
 
 impl Default for FrameDemand {
@@ -25,7 +24,6 @@ impl Default for FrameDemand {
             idle_callbacks: 0,
             pending: Some(DeliveryChange::Unregister),
             unregister_failed: false,
-            fallback_pending: false,
         }
     }
 }
@@ -40,7 +38,6 @@ impl FrameDemand {
             self.request();
         } else {
             self.demanded = false;
-            self.fallback_pending = false;
             self.pending = (!self.unregister_failed).then_some(DeliveryChange::Unregister);
         }
     }
@@ -62,7 +59,6 @@ impl FrameDemand {
     pub(crate) fn on_callback(&mut self) -> Option<DeliveryChange> {
         // A callback is authoritative even when ability restored a retained registration.
         self.registered = true;
-        self.fallback_pending = false;
         if self.pending == Some(DeliveryChange::Register) {
             self.pending = None;
         }
@@ -83,30 +79,11 @@ impl FrameDemand {
         self.pending
     }
 
-    pub(crate) fn schedule_fallback(&mut self) -> bool {
-        if !self.active || !self.demanded || self.registered || self.fallback_pending {
-            return false;
-        }
-        self.fallback_pending = true;
-        true
-    }
-
-    pub(crate) fn begin_fallback(&mut self) -> bool {
-        if !std::mem::take(&mut self.fallback_pending) || !self.active || self.registered {
-            return false;
-        }
-        // Only demand produced during or after this draw can schedule another fallback.
-        std::mem::take(&mut self.demanded)
-    }
-
     pub(crate) fn complete(&mut self, change: DeliveryChange, success: bool) {
         self.pending = None;
         match change {
             DeliveryChange::Register => {
                 self.registered = success;
-                if success {
-                    self.fallback_pending = false;
-                }
             }
             DeliveryChange::Unregister => {
                 self.registered = !success;
@@ -235,106 +212,6 @@ mod tests {
         demand.set_active(true);
         assert_eq!(demand.pending(), None);
         assert_eq!(demand.request(), Some(Register));
-    }
-
-    fn failed_registration() -> FrameDemand {
-        let mut demand = FrameDemand::default();
-        demand.set_active(true);
-        demand.complete(Register, false);
-        demand
-    }
-
-    #[test]
-    fn failed_registration_schedules_only_one_fallback() {
-        let mut demand = failed_registration();
-        assert!(demand.schedule_fallback());
-        for _ in 0..10 {
-            assert_eq!(demand.request(), Some(Register));
-            demand.complete(Register, false);
-            assert!(!demand.schedule_fallback());
-        }
-        assert!(demand.begin_fallback());
-        assert!(!demand.begin_fallback());
-    }
-
-    #[test]
-    fn fallback_without_new_demand_does_not_spin() {
-        let mut demand = failed_registration();
-        assert!(demand.schedule_fallback());
-        assert!(demand.begin_fallback());
-        assert_eq!(demand.pending(), None);
-        assert!(!demand.schedule_fallback());
-    }
-
-    #[test]
-    fn demand_during_fallback_retries_registration() {
-        let mut demand = failed_registration();
-        assert!(demand.schedule_fallback());
-        assert!(demand.begin_fallback());
-        assert_eq!(demand.request(), Some(Register));
-        demand.complete(Register, false);
-        assert!(demand.schedule_fallback());
-        assert!(!demand.schedule_fallback());
-    }
-
-    #[test]
-    fn successful_registration_cancels_fallback() {
-        let mut demand = failed_registration();
-        assert!(demand.schedule_fallback());
-        assert_eq!(demand.request(), Some(Register));
-        demand.complete(Register, true);
-        assert!(!demand.begin_fallback());
-        assert!(!demand.schedule_fallback());
-        assert_eq!(demand.on_callback(), None);
-    }
-
-    #[test]
-    fn unexpected_callback_cancels_fallback() {
-        let mut demand = failed_registration();
-        assert!(demand.schedule_fallback());
-        demand.on_callback();
-        assert!(!demand.begin_fallback());
-        assert!(!demand.schedule_fallback());
-    }
-
-    #[test]
-    fn inactive_window_cancels_fallback_and_cannot_schedule_one() {
-        let mut demand = failed_registration();
-        assert!(demand.schedule_fallback());
-        demand.set_active(false);
-        assert!(!demand.begin_fallback());
-        assert!(!demand.schedule_fallback());
-        assert_eq!(demand.request(), None);
-        assert!(!demand.schedule_fallback());
-        demand.complete(Unregister, true);
-        demand.set_active(true);
-        assert_eq!(demand.pending(), Some(Register));
-        demand.complete(Register, false);
-        assert!(demand.schedule_fallback());
-    }
-
-    #[test]
-    fn surface_destruction_cancels_fallback_before_recreation() {
-        let mut demand = failed_registration();
-        assert!(demand.schedule_fallback());
-        demand.surface_destroyed();
-        assert!(!demand.begin_fallback());
-        assert!(!demand.schedule_fallback());
-        demand.set_active(true);
-        assert_eq!(demand.pending(), Some(Register));
-        demand.complete(Register, false);
-        assert!(demand.schedule_fallback());
-    }
-
-    #[test]
-    fn fallback_demand_is_independent_between_windows() {
-        let mut main = failed_registration();
-        let mut sub = failed_registration();
-        assert!(main.schedule_fallback());
-        assert!(sub.schedule_fallback());
-        main.set_active(false);
-        assert!(!main.begin_fallback());
-        assert!(sub.begin_fallback());
     }
 
     #[test]

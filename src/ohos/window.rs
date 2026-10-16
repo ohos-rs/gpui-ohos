@@ -59,7 +59,6 @@ pub(crate) struct OhosWindowContext {
     pub(crate) gpu_context: Arc<WgpuContext>,
     pub(crate) display: OhosDisplay,
     pub(crate) foreground_executor: ForegroundExecutor,
-    pub(crate) background_executor: crate::BackgroundExecutor,
     pub(crate) frame_callback_active: Rc<Cell<bool>>,
     pub(crate) clipboard: super::clipboard::OhosClipboard,
     pub(crate) cursor_hidden_until_move: Rc<Cell<bool>>,
@@ -326,7 +325,6 @@ impl OhosWindow {
             gpu_context,
             display,
             foreground_executor,
-            background_executor,
             frame_callback_active,
             clipboard,
             cursor_hidden_until_move,
@@ -348,7 +346,6 @@ impl OhosWindow {
             window_id,
             app.clone(),
             foreground_executor.clone(),
-            background_executor,
             frame_callback_active,
         );
 
@@ -1833,10 +1830,10 @@ impl OhosWindow {
             }
             Event::Start => self.update_visibility(WindowVisibility::Visible),
             Event::Stop => self.update_visibility(WindowVisibility::Hidden),
+            #[cfg(not(feature = "native-vsync"))]
             Event::WindowRedraw(_) => {
-                if self.frames.on_xcomponent_callback() {
-                    self.draw_requested_frame(Instant::now());
-                }
+                self.frames.on_xcomponent_callback();
+                self.draw_requested_frame(Instant::now());
             }
             Event::Input(input_event) => {
                 self.handle_input_event(input_event);

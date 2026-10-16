@@ -17,10 +17,6 @@ use frame_delivery_support::window;
 #[allow(dead_code)]
 #[path = "../../src/ohos/frame_delivery.rs"]
 mod frame_delivery;
-#[cfg(all(test, feature = "native-vsync"))]
-#[allow(dead_code)]
-#[path = "../../src/ohos/native_refresh.rs"]
-mod native_refresh;
 pub use gpui::{Pixels, PlatformDispatcher, Priority, RunnableVariant, Size};
 use std::sync::{
     Arc,

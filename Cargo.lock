@@ -1586,7 +1586,6 @@ dependencies = [
  "gpui",
  "image",
  "itertools 0.14.0",
- "libc",
  "log",
  "napi-derive-ohos",
  "napi-ohos",

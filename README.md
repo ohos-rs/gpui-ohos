@@ -25,29 +25,22 @@ including the clipboard metadata MIME type and notification response scheme.
 | --- | --- |
 | `gles` | OpenGL ES rendering, enabled by default. |
 | `vulkan` | Vulkan rendering. |
-| `native-vsync` | Optional per-window switching between NativeVSync and XComponent frame callbacks. |
+| `native-vsync` | Use NativeVSync frame callbacks instead of XComponent callbacks. |
 
 Touch scrolling uses native gesture recognition and supports momentum scrolling.
 Frames are requested on demand through XComponent callbacks by default.
 
 ## Optional NativeVSync delivery
 
-Enable `native-vsync`, then choose the frame source on the embedding UI thread
-after opening the GPUI window:
+Enable `native-vsync` to select NativeVSync for all windows at build time:
 
-```rust
-// Ability window ID: 0 for the main window, or the child window's ID.
-// Use the OS window ID, or 0 for an unassociated receiver.
-// Choose a refresh rate supported by the display.
-gpui_ohos::configure_native_refresh(window_id, os_window_id, Some(display_hz))?;
-
-// Return this window to XComponent callbacks.
-gpui_ohos::configure_native_refresh(window_id, os_window_id, None)?;
+```sh
+cargo build --target aarch64-unknown-linux-ohos --features native-vsync
 ```
 
-XComponent remains the default when the feature is enabled. Native API failures
-fall back to XComponent. Invalid rates or windows unavailable on the calling UI
-thread return `NativeRefreshError`.
+NativeVSync uses the display refresh rate reported by the system and requires
+the platform's native rate APIs. Both modes register callbacks on demand and
+release them when windows become hidden or idle.
 
 ## Example
 

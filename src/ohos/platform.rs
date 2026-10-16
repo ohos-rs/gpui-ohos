@@ -1100,7 +1100,7 @@ impl OhosPlatform {
         // ArkUI can deliver raw contact and recognized Pan callbacks in the
         // same native input batch. Finish that batch before polling unrelated
         // futures or presenting a frame, both of which may block the UI thread.
-        // Frame demand is delivered by the window's XComponent callback.
+        // Frame demand is delivered by the callback selected at build time.
         let input = match event {
             Event::Input(input) => Some((0, input)),
             Event::SubWindowInput { window_id, event } => Some((*window_id, event)),
@@ -1776,7 +1776,6 @@ impl Platform for OhosPlatform {
                 gpu_context: self.gpu_context.clone(),
                 display,
                 foreground_executor: self.foreground_executor.clone(),
-                background_executor: self.background_executor.clone(),
                 frame_callback_active: self.frame_callback_active.clone(),
                 clipboard: self.clipboard.clone(),
                 cursor_hidden_until_move: self.cursor_hidden_until_move.clone(),
