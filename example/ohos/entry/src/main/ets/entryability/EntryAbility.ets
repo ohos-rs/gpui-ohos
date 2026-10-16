@@ -22,6 +22,7 @@ export default class EntryAbility extends NativeAbility {
     ),
     new LazyPlugin(() => new FilesPlugin()),
     new LazyPlugin(() => new MenuPlugin()),
+    // Keep the response scheme aligned with OhosPlatform.queue_notification_uri.
     new LazyPlugin(() => new NotificationPlugin({ scheme: "gpui-notification" })),
     new LazyPlugin(() => new PermissionPlugin()),
     new LazyPlugin(() => new ProcessPlugin()),

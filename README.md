@@ -15,6 +15,10 @@ let application = gpui::Application::with_platform(
 
 Pass the Ability's `OpenHarmonyApp` as `openharmony_app`.
 
+Configure the Ability and its ArkTS plugins as shown in the
+[example entry Ability](./example/ohos/entry/src/main/ets/entryability/EntryAbility.ets),
+including the clipboard metadata MIME type and notification response scheme.
+
 ## Features
 
 | Cargo feature | Purpose |
