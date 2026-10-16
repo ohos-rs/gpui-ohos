@@ -34,4 +34,3 @@ napi-build-ohos = "=1.2.0"
 
 [workspace]
 resolver = "2"
-exclude = ["ohos/vendor/openharmony-ability", "ohos/vendor/openharmony-ability/crates/*"]
