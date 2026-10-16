@@ -1,10 +1,11 @@
 # gpui-ohos
 
-OpenHarmony platform backend for GPUI.
+OpenHarmony platform backend for GPUI, with native windows, GPU rendering,
+touch and mouse input, keyboard and IME support, and system integrations.
 
-This crate is intentionally OHOS-only, so its implementation does not contain
-`target_env = "ohos"` branches. Applications inject the platform explicitly,
-following the same external-platform pattern as `gpui-mobile`:
+## Usage
+
+Create the GPUI application with the OpenHarmony platform:
 
 ```rust
 let application = gpui::Application::with_platform(
@@ -12,20 +13,65 @@ let application = gpui::Application::with_platform(
 );
 ```
 
-The GPUI dependency is pinned to the `ohos-rs/zed` commit that exposes the
-external-platform entry point and excludes OHOS from the Linux backend. All
-OHOS windowing, input, rendering, IME, and gesture behavior lives here.
+Pass the Ability's `OpenHarmonyApp` as `openharmony_app`.
+
+Configure the Ability and its ArkTS plugins as shown in the
+[example entry Ability](./example/ohos/entry/src/main/ets/entryability/EntryAbility.ets),
+including the clipboard metadata MIME type and notification response scheme.
+
+## Features
+
+| Cargo feature | Purpose |
+| --- | --- |
+| `gles` | OpenGL ES rendering, enabled by default. |
+| `vulkan` | Vulkan rendering. |
+| `native-vsync` | Use NativeVSync frame callbacks instead of XComponent callbacks. |
+
+Touch scrolling uses native gesture recognition and supports momentum scrolling.
+Frames are requested on demand through XComponent callbacks by default.
+
+## Optional NativeVSync delivery
+
+Enable `native-vsync` to select NativeVSync for all windows at build time:
+
+```sh
+cargo build --target aarch64-unknown-linux-ohos --features native-vsync
+```
+
+NativeVSync uses the display refresh rate reported by the system and requires
+the platform's native rate APIs. Both modes register callbacks on demand and
+release them when windows become hidden or idle.
 
 ## Example
 
-[`example`](./example) contains a minimal OpenHarmony native module based on
-the NearSend integration: it keeps the embedded GPUI application alive, opens
-one full-size window, and renders a centered greeting.
+The [example app](./example/README.md) demonstrates windows, text input,
+scrolling, menus, file pickers, clipboard, credentials, screen capture,
+notifications, and application lifecycle.
 
 ```bash
 cd example
-ohrs build --arch aarch
+sh scripts/build-native.sh --release
 ```
+
+For desktop or 2in1 targets, prefix the build command with
+`OHOS_DEVICE_TYPE=desktop`. See the example's instructions for signing and
+building the HAP.
+
+## Platform notes
+
+- Declare app identity and URL schemes in `app.json5` and `module.json5`.
+  `register_url_scheme()` validates the installed declaration.
+- Clipboard reads require `ohos.permission.READ_PASTEBOARD`, an ACL-enabled
+  signing profile, and runtime permission. Persistent file access requires
+  `ohos.permission.FILE_ACCESS_PERSIST`; transparent main windows may require
+  `ohos.permission.SET_WINDOW_TRANSPARENT`.
+- Hiding other applications, dock menus, and recent-document lists are
+  unavailable through the application SDK.
+- Native IME configuration does not expose autocorrection, capitalization,
+  or suggestion controls. Missing hardware key mappings use a US layout.
+
+For implementation details, see [touch input and frame scheduling](./docs/touch-input.md)
+and [OHOS adaptation performance](./docs/ohos-performance.md).
 
 ## License
 

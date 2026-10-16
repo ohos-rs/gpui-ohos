@@ -1,0 +1,19 @@
+[package]
+name = "ohos-path-target-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[workspace.dependencies]
+wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "8b419de0906f37af69d728f1735132e427a3436f", default-features = false, features = ["metal", "std", "wgsl", "parking_lot"] }
+pollster = "0.4"
+
+[dependencies]
+wgpu.workspace = true
+pollster.workspace = true
+
+[[test]]
+name = "path-targets"
+path = "path_targets.rs"

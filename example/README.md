@@ -1,46 +1,61 @@
-# gpui-ohos minimal example
+# gpui-ohos example
 
-This native module follows NearSend's OpenHarmony integration pattern while
-keeping the GPUI application intentionally small. It opens one window and
-renders a centered greeting without component libraries or application state.
+An OpenHarmony app demonstrating GPUI windows, scrolling, text input, menus,
+clipboard, file pickers, credentials, screen capture, notifications, and
+application lifecycle.
 
-Build it from the repository root:
+## Build the native module
 
-```bash
-cd example
-ohrs build --arch aarch
+Run from the `example` directory with Rust, `ohrs`, and the OpenHarmony SDK
+configured:
+
+```sh
+sh scripts/build-native.sh --release
 ```
 
-The generated native module is
-`dist/arm64-v8a/libgpui_ohos_example.so`. Copy it (and the adjacent
-`libc++_shared.so`) into the application's native library directory. Configure
-the Ability package with `@ohos-rs/ability` and
-`@ohos-rs/ability-plugin-app-control`, then use the same module name on both
-the Ability and page sides:
+The script copies the native library and declarations into the HAP project.
+Phone targets use the default configuration. For desktop or 2in1 targets:
 
-```ts
-// EntryAbility.ets
-import { LazyPlugin, NativeAbility } from "@ohos-rs/ability";
-import { AppControlPlugin } from "@ohos-rs/ability-plugin-app-control";
-
-export default class EntryAbility extends NativeAbility {
-  public moduleName: string = "gpui_ohos_example";
-  public defaultPage: boolean = true;
-  public bridgePlugins = [new LazyPlugin(() => new AppControlPlugin())];
-}
+```sh
+OHOS_DEVICE_TYPE=desktop sh scripts/build-native.sh --release
 ```
 
-```ts
-// pages/Index.ets
-import { DefaultXComponent } from "@ohos-rs/ability";
+To build with NativeVSync instead of XComponent callbacks:
 
-@Entry
-@Component
-struct Index {
-  build() {
-    DefaultXComponent({ moduleName: "gpui_ohos_example" })
-      .height("100%")
-      .width("100%");
-  }
-}
+```sh
+sh scripts/build-native.sh --release -- --locked --features native-vsync
 ```
+
+The app displays the frame source selected at build time. See
+[NativeVSync delivery](../README.md#optional-nativevsync-delivery) for details.
+
+## Build the HAP
+
+From the `example` directory, copy the local project templates if they do not
+already exist. Both destination files are ignored by Git:
+
+```sh
+cd ohos
+cp -n AppScope/app.template.json5 AppScope/app.json5
+cp -n build-profile.template.json5 build-profile.json5
+```
+
+Configure signing for the bundle name in `AppScope/app.json5` through DevEco
+Studio, or set `signingConfigs` and the product's `signingConfig` in
+`build-profile.json5`. Then build with DevEco Studio or its command-line tools:
+
+```sh
+ohpm install --all
+hvigorw assembleHap --mode module -p product=default
+```
+
+The signed package is `entry/build/default/outputs/default/entry-default-signed.hap`
+relative to the `ohos` directory.
+
+## Permissions
+
+Clipboard reads require `ohos.permission.READ_PASTEBOARD` in the module manifest,
+a signing profile whose ACL grants it, and runtime permission. The example
+declares and requests the permission; the local signing profile must provide
+the matching ACL. Notifications and screen capture may also prompt for system
+authorization.
