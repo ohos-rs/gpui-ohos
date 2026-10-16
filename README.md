@@ -16,14 +16,14 @@ The GPUI dependency is pinned to the `ohos-rs/zed` commit that exposes the
 external-platform entry point and excludes OHOS from the Linux backend. All
 OHOS windowing, input, rendering, IME, and gesture behavior lives here.
 
-OpenHarmony Ability and its Rust plugins use the
+OpenHarmony Ability, its derive macro and Rust plugins use the published
+`1.0.0-beta.3` crates. The example's ArkTS packages use the
 [`feat/ohos-adaptation-runtime-fixes`](https://github.com/richerfu/openharmony-ability/tree/feat/ohos-adaptation-runtime-fixes)
-branch. Rust crates and ArkTS packages share the example's initialized
-`openharmony-ability` submodule; its Git entry pins the exact commit. Run
-`git submodule update --init --recursive` before building.
+branch through the `openharmony-ability` submodule; its Git entry pins the exact
+commit. Run `git submodule update --init --recursive` before building the HAP.
 
-The pinned Ability revision uses published ArkUI `0.4.2`, XComponent `0.5.2`,
-and IME `0.3.1` bindings. GPUI enables Ability's `keyboard`, `mouse`, and `drag`
+Ability uses published ArkUI `0.4.2`, XComponent `0.5.2`, and IME `0.3.1`
+bindings. GPUI enables Ability's `keyboard`, `mouse`, and `drag`
 features for hardware key delivery, native mouse cancellation, and file drag/drop.
 Ability's `mouse` feature forwards XComponent's `api-18`, so GPUI uses Ability's
 re-exported XComponent types without a direct XComponent binding dependency.
@@ -34,28 +34,49 @@ The crate and example need no crates.io patches or neighboring local binding che
 XComponent's native ArkUI Pan supplies scroll recognition, displacement and
 release velocity. Raw contacts support control capture, taps, long presses and
 stopping inertia. The first accepted Pan packet moves the view immediately.
-Rendering and post-release momentum advance through XComponent frame callbacks,
-registered on demand and removed after 12 idle callbacks. A failed registration
-schedules one delayed draw; visibility and surface changes are applied before
-drawing.
+By default, rendering and post-release momentum advance through XComponent frame
+callbacks, registered on demand and removed after 12 idle callbacks. A failed
+registration schedules one delayed draw; visibility and surface changes are
+applied before drawing.
 
 See [touch input and frame scheduling](./docs/touch-input.md) for ownership and
 lifecycle details, and [OHOS adaptation performance](./docs/ohos-performance.md)
-for frame pacing, quad rendering and runtime ownership. The host regression
-harness compiles the actual platform input adapter without linking OHOS native
-libraries:
+for frame pacing, quad rendering and runtime ownership.
 
-```bash
-cargo test --manifest-path tests/touch/Cargo.toml --locked
-cargo clippy --manifest-path tests/touch/Cargo.toml --locked --all-targets --no-deps -- -D warnings
+## Optional NativeVSync delivery
+
+Enable the `native-vsync` Cargo feature to allow each window to switch between
+NativeVSync and XComponent callbacks at runtime. XComponent remains the default,
+including when this feature is enabled. Builds without the feature do not link
+NativeVSync. Receiver and callback ownership use `ohos-vsync-binding` `0.3.1`.
+
+On the embedding UI thread, after opening the GPUI window:
+
+```rust
+// Ability window ID: 0 for the main window, or the child window's ID.
+// Use the OS window ID and a rate from its display's supported refresh rates.
+gpui_ohos::configure_native_refresh(window_id, os_window_id, Some(display_hz))?;
+
+// Return this window to XComponent callbacks.
+gpui_ohos::configure_native_refresh(window_id, os_window_id, None)?;
 ```
+
+The switch is deferred until outside frame callbacks. Only one source delivers
+frames to a window; callbacks queued for an old native receiver are discarded.
+Native callbacks return to the UI thread, and the next VSync is requested before
+drawing. Hidden, destroyed or idle windows release their receiver and refresh-rate
+request; new demand recreates it. Missing native rate APIs or receiver failures
+fall back to XComponent. There is no fixed refresh-rate target.
+
+Invalid rates and windows absent from the calling UI thread return
+`NativeRefreshError`. Passing `None` for an already closed window succeeds.
 
 ## Example
 
 [`example`](./example) exercises GPUI windows, scrolling, menus, file pickers,
 clipboard, credentials, screen capture, notifications, appearance, system state,
-and application lifecycle on OpenHarmony. Its native module uses the locally
-initialized `openharmony-ability` submodule for the new bridge plugins.
+and application lifecycle on OpenHarmony. Its native module uses the published
+Ability Rust crates; the HAP uses the initialized submodule's ArkTS plugins.
 
 ```bash
 cd example

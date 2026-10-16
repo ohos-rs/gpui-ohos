@@ -4,6 +4,10 @@ This example is the test app for GPUI's OpenHarmony platform support. The
 current screen exposes these checks. The main screen and child windows scroll
 vertically when their controls exceed the window height:
 
+- **Frame source** (with `native-vsync`) switches the main window's request
+  between NativeVSync at the display's current refresh rate and XComponent
+  callbacks. Native API failures fall back to XComponent; hilog reports the
+  requested source and any fallback.
 - **Credential storage** writes a credential, updates it, reads it back, then deletes it
   using the native AssetStore binding.
 - **IME input** accepts real text and cycles all eight GPUI confirm-key hints.
@@ -68,6 +72,12 @@ For a desktop or 2in1 target, build the native module with
 new native library and declarations into the HAP project. The Ability's `isDesktop`
 flag gates the floating window menu bar. Use the default mobile build for a
 phone target.
+
+To enable the frame-source switch in a phone release build:
+
+```sh
+sh scripts/build-native.sh --release -- --locked --features native-vsync
+```
 
 ## Build the HAP
 

@@ -26,11 +26,17 @@ for gesture ownership and lifecycle details.
 - `MainWake` coalesces foreground task wake events, including `UserEvent` while
   no frame callback is registered. Each window owns an independent `FrameDemand`
   state machine; main and child windows do not share frame demand.
-- XComponent is the display frame source. Demand switches
+- XComponent is the default display frame source. Demand switches
   `set_frame_input_delivery_for` to `FrameInputDelivery::Continuous`, registering
   the window's callback. After 12 consecutive callbacks without demand, it
   switches to `OnDemand` to unregister. Input callbacks stay registered. Startup,
   surface creation/recreation and becoming visible request a first frame.
+- The optional `native-vsync` feature allows per-window source selection through
+  [`configure_native_refresh`](../README.md#optional-nativevsync-delivery).
+  NativeVSync uses one-shot requests and re-arms before drawing on the UI thread.
+  Idle and lifecycle cleanup releases its receiver and rate request. Source
+  changes run outside callbacks; late native callbacks are rejected, and native
+  failures fall back to XComponent.
 - Registration and unregistration run only on the UI thread. `FrameCallbackScope`
   covers native redraw delivery across all windows; changes requested inside
   that scope are coalesced into a later foreground task. Native redraw events
@@ -88,24 +94,11 @@ export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER=aarch64-unknown-linux-ohos
 cargo clippy --locked --target aarch64-unknown-linux-ohos --all-features --all-targets -- -D warnings
 cargo clippy --locked --target aarch64-unknown-linux-ohos --all-targets -- -D warnings
 cargo fmt --check
-cargo test --manifest-path tests/touch/Cargo.toml --locked
-cargo clippy --manifest-path tests/touch/Cargo.toml --locked --all-targets --no-deps -- -D warnings
-cargo fmt --manifest-path tests/touch/Cargo.toml --check
 (cd example && cargo check --locked --target aarch64-unknown-linux-ohos)
 ```
 
-Host regressions cover gestures, callback demand and registration failure
-recovery, presentation retry and lifecycle demand, unavailable surfaces without
-idle retries, viewport deduplication, wake coalescing, timers, blocking background
-tasks, worker limits, monitor backoff, priority fairness, shutdown, cache
-variants, quad pipeline eligibility and pixel conversion. `FrameDemand`
-regressions include fallback coalescing, demand during fallback, successful
-registration, unexpected callbacks, hiding and surface destruction.
-
-Host tests and target compilation do not establish native callback safety or
-real-device power use. Simulator checks should cover first frames, main/child
-window independence, hide/restore, surface recreation, scrolling, registration
-failure recovery and continuous-callback degradation after failed unregistration.
-
-Rendering checks are documented in the [path target GPU regression](../tests/path-targets/README.md)
-and [shader pixel comparison](../tests/shader-compare/README.md) harnesses.
+OHOS device checks should cover first frames, main/child window independence,
+hide/restore, surface recreation, scrolling, registration failure recovery and
+switching between NativeVSync and XComponent callbacks. Verify actual NativeVSync
+delivery on hardware; simulators without the native rate API should continue
+rendering through XComponent.

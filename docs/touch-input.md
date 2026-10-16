@@ -1,11 +1,21 @@
 # OHOS touch input and frame scheduling
 
-`src/ohos/window.rs` advances rendering and momentum through XComponent frame
-callbacks. Each window registers on demand and unregisters after 12 idle
-callbacks. Registration changes run on the UI thread outside native frame
+By default, `src/ohos/window.rs` advances rendering and momentum through
+XComponent frame callbacks. Each window registers on demand and unregisters after
+12 idle callbacks. Registration changes run on the UI thread outside native frame
 callbacks. A failed registration schedules one fallback draw after at least
 16 ms; new demand retries registration. Failed unregistration leaves continuous
 callbacks enabled until surface destruction.
+
+With the optional `native-vsync` feature, the embedding application can select
+NativeVSync per window and switch back to XComponent at runtime using
+[`configure_native_refresh`](../README.md#optional-nativevsync-delivery).
+Both sources use the same frame demand and momentum handling. Native callbacks
+are dispatched to the UI thread, with the next frame armed before drawing.
+Source switches and receiver destruction are deferred outside frame callbacks;
+generation tokens reject native callbacks queued before a switch or teardown.
+Native API failures fall back to XComponent. Hidden or idle windows release the
+native receiver, and later demand recreates it.
 
 Touch scrolling is adapted by `src/ohos/touch_scroll.rs`, using only GPUI's
 public `PlatformInput` interface. GPUI itself is the unmodified git dependency
@@ -40,11 +50,7 @@ time; a delayed frame integrates elapsed motion without replaying intermediate
 frames, and a frame time before release cannot advance the curve. Swipe does not
 launch another curve. No GPUI momentum frame callbacks are scheduled. Pending
 long presses and frame-registration failure recovery use cancellable, one-shot
-timers. Host regressions are run with:
-
-```sh
-cargo test --manifest-path tests/touch/Cargo.toml --locked
-```
+timers.
 
 Hiding or destroying a surface unregisters its frame callback and cancels any
 pending fallback draw. Hidden or destroyed surfaces do not present frames;
