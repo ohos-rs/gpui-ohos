@@ -2722,7 +2722,7 @@ dependencies = [
  "bitflags 2.13.2",
  "ohos-accessibility-sys",
  "ohos-arkui-input-sys",
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
 ]
 
 [[package]]
@@ -2748,7 +2748,7 @@ dependencies = [
  "ohos-arkui-input-binding",
  "ohos-arkui-sys",
  "ohos-drawing-binding",
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
  "ohos-image-binding",
  "ohos-image-native-binding",
  "ohos-udmf-binding",
@@ -2763,7 +2763,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "efd9080257b8ad912f3cf3ddaea08bb102009201891a5ea6f642973e700981f4"
 dependencies = [
  "ohos-arkui-input-sys",
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
 ]
 
 [[package]]
@@ -2787,17 +2787,19 @@ dependencies = [
 
 [[package]]
 name = "ohos-asset-binding"
-version = "0.1.3"
-source = "git+https://github.com/ohos-rs/ohos-native-bindings.git?rev=b732254b974f5a0a85c58cd1c20744b3f32e81fd#b732254b974f5a0a85c58cd1c20744b3f32e81fd"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12d939a0576aa5ce0cc932b7f475d12ad1e53d8116353a5ccf771abe124dea84"
 dependencies = [
  "ohos-asset-sys",
- "ohos-enum-derive 0.1.1",
+ "ohos-enum-derive",
 ]
 
 [[package]]
 name = "ohos-asset-sys"
-version = "0.1.3"
-source = "git+https://github.com/ohos-rs/ohos-native-bindings.git?rev=b732254b974f5a0a85c58cd1c20744b3f32e81fd#b732254b974f5a0a85c58cd1c20744b3f32e81fd"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdb56472a13d86d4fb226ad3987c252a087fb24e336142dcad29a3878c5bd686"
 
 [[package]]
 name = "ohos-display-binding"
@@ -2806,7 +2808,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9deac94b3c79d95bb000544a7a254df77d519a139fb1f1b255cb6177ab8234d4"
 dependencies = [
  "ohos-display-sys",
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
 ]
 
 [[package]]
@@ -2821,19 +2823,8 @@ version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ebd3e4ec171eb0a6b378ec4610d297443acedbe54a72fda5289b32bd9374706"
 dependencies = [
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
  "ohos-native-drawing-sys",
-]
-
-[[package]]
-name = "ohos-enum-derive"
-version = "0.1.1"
-source = "git+https://github.com/ohos-rs/ohos-native-bindings.git?rev=b732254b974f5a0a85c58cd1c20744b3f32e81fd#b732254b974f5a0a85c58cd1c20744b3f32e81fd"
-dependencies = [
- "convert_case 0.6.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -2888,7 +2879,7 @@ checksum = "46dcea2d0b79ab8bde89addd3bec3efed9be3e1f3837d3d715a10cc800b36f60"
 dependencies = [
  "env_filter",
  "log",
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
  "ohos-hilogs-sys",
 ]
 
@@ -2906,7 +2897,7 @@ checksum = "4a035db0f0e3d523be43952ae203042bbd5fff10f8f4fecb488a2340574dfd86"
 dependencies = [
  "napi-ohos",
  "napi-sys-ohos",
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
  "ohos-image-sys",
  "ohos-resource-manager-sys",
 ]
@@ -2919,7 +2910,7 @@ checksum = "f2939b0636c6971a88808d133891aa204a4ef25889824dc2b5ea31d2828c5c91"
 dependencies = [
  "libc",
  "napi-sys-ohos",
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
  "ohos-image-native-sys",
  "ohos-native-buffer-binding",
  "ohos-native-buffer-sys",
@@ -2953,7 +2944,7 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b339064c7ba5f448ec4cecdb0bf44b9aa7ce4d1d60149552fed376bf6ca5248a"
 dependencies = [
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
  "ohos-input-method-sys",
  "rustc-hash 2.1.3",
 ]
@@ -3048,7 +3039,7 @@ version = "0.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a5ae4b165398c7d604a149af742d3394730c653a9b77b67a1359e609b048c51"
 dependencies = [
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
  "ohos-image-native-binding",
  "ohos-udmf-sys",
 ]
@@ -3077,7 +3068,7 @@ version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f0dd357b40e6826120619403a78901c12d76a390a1884a4b3ef9c938d8ef908"
 dependencies = [
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
  "ohos-image-native-binding",
  "ohos-native-window-manager-sys",
 ]
@@ -3093,7 +3084,7 @@ dependencies = [
  "napi-sys-ohos",
  "ohos-accessibility-binding",
  "ohos-arkui-input-binding",
- "ohos-enum-derive 0.1.2",
+ "ohos-enum-derive",
  "ohos-xcomponent-sys",
  "raw-window-handle",
 ]

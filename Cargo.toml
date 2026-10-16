@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+accesskit_ohos = { git = "https://github.com/richerfu/accesskit.git", rev = "ea2d8c4", features = ["api-15"] }
 libc = "0.2"
 anyhow = "1"
 bytemuck = "1"
@@ -21,6 +22,10 @@ gpui = { git = "https://github.com/ohos-rs/zed", rev = "f45c7c22d0", default-fea
 itertools = "0.14.0"
 image = { version = "0.25.1", default-features = false }
 log = "0.4"
+ohos-accessibility-binding = "0.1"
+ohos-asset-binding = "0.1.5"
+ohos-fileuri-binding = "0.1"
+ohos-fileshare-binding = "0.1"
 ohos-vsync-binding = { version = "0.3.1", default-features = false, features = ["api-20"] }
 napi-ohos = "=1.2.0"
 napi-derive-ohos = "=1.2.0"
@@ -68,6 +73,7 @@ name = "gpui_ohos"
 path = "src/gpui_ohos.rs"
 
 [dependencies]
+accesskit_ohos.workspace = true
 gpui.workspace = true
 anyhow.workspace = true
 bytemuck.workspace = true
@@ -77,7 +83,12 @@ font-kit.workspace = true
 futures.workspace = true
 itertools.workspace = true
 image.workspace = true
+libc.workspace = true
 log.workspace = true
+ohos-accessibility-binding.workspace = true
+ohos-asset-binding.workspace = true
+ohos-fileuri-binding.workspace = true
+ohos-fileshare-binding.workspace = true
 ohos-vsync-binding = { workspace = true, optional = true }
 openharmony-ability.workspace = true
 openharmony-ability-plugin-menu.workspace = true
@@ -104,11 +115,3 @@ sha2.workspace = true
 smol.workspace = true
 uuid.workspace = true
 wgpu.workspace = true
-
-[target.'cfg(target_env = "ohos")'.dependencies]
-libc.workspace = true
-accesskit_ohos = { git = "https://github.com/richerfu/accesskit.git", rev = "ea2d8c4", features = ["api-15"] }
-ohos-asset-binding = { git = "https://github.com/ohos-rs/ohos-native-bindings.git", rev = "b732254b974f5a0a85c58cd1c20744b3f32e81fd" }
-ohos-accessibility-binding = "0.1"
-ohos-fileuri-binding = "0.1"
-ohos-fileshare-binding = "0.1"
