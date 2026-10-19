@@ -13,10 +13,19 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 use frame_delivery_support::native_frames;
 #[cfg(test)]
 use frame_delivery_support::window;
+#[allow(dead_code)]
+#[path = "../../src/ohos/cursor_visibility.rs"]
+mod cursor_visibility;
 #[cfg(test)]
 #[allow(dead_code)]
 #[path = "../../src/ohos/frame_delivery.rs"]
 mod frame_delivery;
+#[allow(dead_code)]
+#[path = "../../src/ohos/input_echo.rs"]
+mod input_echo;
+#[allow(dead_code)]
+#[path = "../../src/ohos/launch.rs"]
+mod launch;
 pub use gpui::{Pixels, PlatformDispatcher, Priority, RunnableVariant, Size};
 use std::sync::{
     Arc,
