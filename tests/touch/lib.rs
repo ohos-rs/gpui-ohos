@@ -21,9 +21,6 @@ mod cursor_visibility;
 #[path = "../../src/ohos/frame_delivery.rs"]
 mod frame_delivery;
 #[allow(dead_code)]
-#[path = "../../src/ohos/input_echo.rs"]
-mod input_echo;
-#[allow(dead_code)]
 #[path = "../../src/ohos/launch.rs"]
 mod launch;
 pub use gpui::{Pixels, PlatformDispatcher, Priority, RunnableVariant, Size};
@@ -388,3 +385,27 @@ mod tests {
         drop(task);
     }
 }
+
+#[cfg(test)]
+extern crate self as ohos_fileshare_binding;
+#[cfg(test)]
+pub struct PolicyInfo {
+    pub uri: String,
+    pub operation_mode: u32,
+}
+#[cfg(test)]
+pub fn persist_permission(_: &[PolicyInfo]) -> anyhow::Result<Vec<String>> {
+    anyhow::bail!("Unexpected native file grant")
+}
+#[cfg(test)]
+pub fn activate_permission(_: &[PolicyInfo]) -> anyhow::Result<Vec<String>> {
+    anyhow::bail!("Unexpected native file activation")
+}
+#[cfg(test)]
+pub fn check_persistent_permission(_: &[PolicyInfo]) -> anyhow::Result<Vec<bool>> {
+    anyhow::bail!("Unexpected native file query")
+}
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../src/ohos/file_access.rs"]
+mod file_access;

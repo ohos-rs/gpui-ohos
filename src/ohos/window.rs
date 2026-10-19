@@ -37,7 +37,6 @@ use rustc_hash::FxHashMap;
 
 use super::display::OhosDisplay;
 use super::frame_delivery::WindowFrames;
-use super::input_echo::{InputEcho, PendingInputEcho};
 use super::keyboard::OhosKeyState;
 use super::platform::appearance_for_color_mode;
 use super::presentation::{Presentation, PresentationDemand};
@@ -129,7 +128,6 @@ pub(crate) struct OhosWindow {
     keyboard_overlap_device_px: Cell<i32>,
     input_handler: Rc<RefCell<Option<PlatformInputHandler>>>,
     ime_text_update_pending: Rc<Cell<bool>>,
-    pending_input_echo: Rc<RefCell<Option<(u64, PendingInputEcho)>>>,
     edit_generation: Rc<Cell<u64>>,
     clipboard: super::clipboard::OhosClipboard,
     file_access: Arc<super::file_access::FileAccess>,
@@ -694,7 +692,6 @@ impl OhosWindow {
             keyboard_overlap_device_px: Cell::new(0),
             input_handler: Rc::new(RefCell::new(None)),
             ime_text_update_pending: Rc::new(Cell::new(false)),
-            pending_input_echo: Rc::new(RefCell::new(None)),
             edit_generation: Rc::new(Cell::new(0)),
             clipboard,
             file_access,
@@ -1295,14 +1292,22 @@ impl OhosWindow {
             }
         };
         *self.ime_attachment.borrow_mut() = Some(cancellation);
-        let connection = self.background_executor.spawn(async move {
-            attachment
-                .run(show_keyboard)
-                .map_err(|error| error.to_string())
-        });
+        let (sender, connection) = futures::channel::oneshot::channel();
+        self.background_executor
+            .spawn(async move {
+                attachment.run(show_keyboard, |result| {
+                    if let Err(Err(error)) = sender.send(result.map_err(|error| error.to_string()))
+                    {
+                        log::debug!("Abandoned OHOS IME attachment failed: {error}");
+                    }
+                });
+            })
+            .detach();
         self.foreground_executor
             .spawn(async move {
-                let result = connection.await;
+                let result = connection
+                    .await
+                    .unwrap_or_else(|error| Err(error.to_string()));
                 let Some(window) = window.upgrade() else {
                     return;
                 };
@@ -2737,6 +2742,7 @@ impl OhosWindow {
                 self.refresh_display();
             }
             Event::WindowDestroy => {
+                self.cancel_keyboard_retry();
                 if self.closed.replace(true) {
                     return;
                 }
@@ -2776,8 +2782,6 @@ impl OhosWindow {
         }
         let pending = self.ime_text_update_pending.clone();
         let input_handler = self.input_handler.clone();
-        let pending_input_echo = self.pending_input_echo.clone();
-        let edit_generation = self.edit_generation.clone();
         let window_id = self.window_id;
         let window = self
             .window_index
@@ -2811,17 +2815,8 @@ impl OhosWindow {
                             caret.saturating_sub(4096)
                         };
                         let mut adjusted = None;
-                        let Some(text) = handler
-                            .text_for_range(start..start.saturating_add(8193), &mut adjusted)
-                        else {
-                            let context = handler.text_input_context(8192)?;
-                            return Some(TextState {
-                                text: context.text,
-                                offset: 0,
-                                selection: context.selection.range,
-                                reversed: context.selection.reversed,
-                            });
-                        };
+                        let text = handler
+                            .text_for_range(start..start.saturating_add(8193), &mut adjusted)?;
                         Some(TextState {
                             text,
                             offset: adjusted.map_or(start, |range| range.start),
@@ -2830,23 +2825,9 @@ impl OhosWindow {
                         })
                     })();
                     // Clear the previous field's context when the new handler
-                    // provides neither document text nor read-only context.
+                    // provides no document text.
                     snapshot.unwrap_or_default()
                 };
-                {
-                    let mut pending = pending_input_echo.borrow_mut();
-                    if let Some((generation, input)) = pending.as_ref() {
-                        if *generation == edit_generation.get() {
-                            match input.observe(&state.text, &state.selection) {
-                                InputEcho::Partial => return,
-                                InputEcho::Unchanged => {}
-                                InputEcho::Finished => *pending = None,
-                            }
-                        } else {
-                            *pending = None;
-                        }
-                    }
-                }
                 if app.is_text_input_ready_for(window_id)
                     && let Some(window) = window.and_then(|window| window.upgrade())
                 {
@@ -3377,11 +3358,6 @@ impl OhosWindow {
 
         match ime_event {
             ImeEvent::TextInputEvent(data) => {
-                let pending = handler.text_input_context(8192).and_then(|context| {
-                    PendingInputEcho::new(&context.text, context.selection.range, &data.text)
-                });
-                *self.pending_input_echo.borrow_mut() =
-                    pending.map(|pending| (self.edit_generation.get(), pending));
                 handler.replace_text_in_range(None, &data.text);
                 handler.unmark_text();
             }
@@ -3522,7 +3498,7 @@ impl OhosWindow {
                         && let Some(app) = self.app.borrow().clone()
                     {
                         self.background_executor
-                            .spawn(super::platform::show_file_error(
+                            .spawn(super::platform::show_platform_error(
                                 app,
                                 self.window_id,
                                 "Unable to open dropped files",

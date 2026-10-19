@@ -6,7 +6,6 @@ import { FilesPlugin } from "@ohos-rs/ability-plugin-files";
 import { MenuPlugin } from "@ohos-rs/ability-plugin-menu";
 import { NotificationPlugin } from "@ohos-rs/ability-plugin-notification";
 import { PermissionPlugin } from "@ohos-rs/ability-plugin-permission";
-import { ProcessPlugin } from "@ohos-rs/ability-plugin-process";
 import { SystemStatePlugin } from "@ohos-rs/ability-plugin-system-state";
 import { UrlPlugin } from "@ohos-rs/ability-plugin-url";
 import { WindowPlugin } from "@ohos-rs/ability-plugin-window";
@@ -25,7 +24,6 @@ export default class EntryAbility extends NativeAbility {
     // Keep the response scheme aligned with OhosPlatform.queue_notification_uri.
     new LazyPlugin(() => new NotificationPlugin({ scheme: "gpui-notification" })),
     new LazyPlugin(() => new PermissionPlugin()),
-    new LazyPlugin(() => new ProcessPlugin()),
     new LazyPlugin(() => new SystemStatePlugin()),
     new LazyPlugin(() => new UrlPlugin()),
     new LazyPlugin(() => new WindowPlugin()),

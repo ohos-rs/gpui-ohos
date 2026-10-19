@@ -180,6 +180,7 @@ impl FileAccess {
             .context("File access history could not be loaded")?;
         let mut remembered = false;
         let mut complete = true;
+        let mut failures = Vec::new();
         for uri in uris {
             let mut policy = PolicyInfo {
                 uri: uri.clone(),
@@ -191,20 +192,27 @@ impl FileAccess {
                 log::debug!("Cannot retain writable file access for {uri}: {error:#}");
                 policy.operation_mode = READ;
                 if let Err(error) = backend.persist(&policy) {
-                    log::warn!("Cannot retain file access for {uri}: {error:#}");
+                    failures.push(format!("Cannot retain file access for {uri}: {error:#}"));
+                    complete = false;
                     continue;
                 }
             }
             if let Err(error) = backend.activate(&policy) {
                 complete = false;
-                log::warn!("Cannot activate retained file access for {uri}: {error:#}");
+                failures.push(format!(
+                    "Cannot activate retained file access for {uri}: {error:#}"
+                ));
             }
             policies.insert(uri.clone(), policy.operation_mode);
             remembered = true;
         }
         state.dirty |= remembered;
         state.restored &= complete;
-        self.save_state(&mut state)
+        if let Err(error) = self.save_state(&mut state) {
+            failures.push(format!("Cannot save file access history: {error:#}"));
+        }
+        anyhow::ensure!(failures.is_empty(), "{}", failures.join("\n"));
+        Ok(())
     }
 
     fn save_state(&self, state: &mut FileAccessState) -> Result<()> {
@@ -262,6 +270,7 @@ mod tests {
         active: Cell<u32>,
         fail_checks: Cell<bool>,
         fail_activations: Cell<bool>,
+        rejected_uri: Option<String>,
         calls: RefCell<Vec<(&'static str, u32)>>,
     }
 
@@ -270,6 +279,10 @@ mod tests {
             self.calls
                 .borrow_mut()
                 .push(("persist", policy.operation_mode));
+            anyhow::ensure!(
+                self.rejected_uri.as_ref() != Some(&policy.uri),
+                "Rejected URI"
+            );
             anyhow::ensure!(
                 self.temporary.get() & policy.operation_mode == policy.operation_mode,
                 "Not granted"
@@ -487,7 +500,7 @@ mod tests {
         backend.temporary.set(READ_WRITE);
         backend.fail_activations.set(true);
         let access = directory.access()?;
-        access.remember_with(&[URI.into()], &backend)?;
+        assert!(access.remember_with(&[URI.into()], &backend).is_err());
         assert_eq!(backend.active.get(), 0);
         backend.fail_activations.set(false);
         backend.temporary.set(0);
@@ -566,9 +579,30 @@ mod tests {
     fn rejected_grants_are_not_saved() -> Result<()> {
         let directory = Directory::new()?;
         let backend = Backend::default();
-        remember(&directory, &backend)?;
+        assert!(remember(&directory, &backend).is_err());
         assert!(!directory.history().exists());
         assert_eq!(backend.active.get(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn partial_persistence_reports_failure_and_saves_successful_grants() -> Result<()> {
+        let directory = Directory::new()?;
+        let rejected = format!("{URI}/rejected");
+        let backend = Backend {
+            rejected_uri: Some(rejected.clone()),
+            ..Default::default()
+        };
+        backend.temporary.set(READ_WRITE);
+        let access = directory.access()?;
+        let error = access
+            .remember_with(&[URI.into(), rejected.clone()], &backend)
+            .expect_err("partial persistence must be reported");
+        assert!(error.to_string().contains(&rejected));
+        let policies: BTreeMap<String, u32> =
+            serde_json::from_slice(&std::fs::read(directory.history())?)?;
+        assert_eq!(policies.get(URI), Some(&READ_WRITE));
+        assert!(!policies.contains_key(&rejected));
         Ok(())
     }
 

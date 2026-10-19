@@ -99,7 +99,18 @@ git submodule update --init --recursive
 Rust dependencies and the example's ArkTS packages use the same submodule commit.
 It includes unpublished runtime interfaces; using registry beta.3 for only one
 side of that interface is unsupported. The IME binding dependency is pinned by
-Ability to its public Git commit until a compatible release is available.
+Ability to an exact Git commit until a compatible release is available. When
+sharing a local integration branch, publish its dependency commits first.
+
+IME attachment cancellation only signals the owning background worker; the
+worker completes native cleanup before another request for that editor runs.
+Terminal echo reconciliation belongs to the terminal implementation and is not
+part of the platform input interface.
+
+Persist restart state before requesting a restart. A rejected SDK request keeps
+GPUI windows alive and reports the error. An accepted restart can terminate the
+process before shutdown observers finish, so they cannot be used for mandatory
+restart persistence.
 
 Portable checks:
 

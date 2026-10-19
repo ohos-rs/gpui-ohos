@@ -35,7 +35,6 @@ use openharmony_ability_plugin_notification as notification_plugin;
 use notification_plugin::{
     NotificationAction, NotificationBridgePlugin, NotificationClient, ShowNotificationRequest,
 };
-use openharmony_ability_plugin_process::ProcessBridgePlugin;
 pub(super) use openharmony_ability_plugin_system_state as system_state_plugin;
 
 use openharmony_ability_plugin_url::{UrlBridgePlugin, UrlExt as _};
@@ -630,7 +629,6 @@ impl OhosPlatform {
             app.register_plugin(ClipboardBridgePlugin::default()),
             app.register_plugin(FilesBridgePlugin),
             app.register_plugin(NotificationBridgePlugin),
-            app.register_plugin(ProcessBridgePlugin),
             app.register_plugin(SystemStateBridgePlugin),
             app.register_plugin(WindowBridgePlugin),
         ] {
@@ -769,6 +767,15 @@ impl OhosPlatform {
                         focused: true,
                     });
                 }
+            }
+            // Native menus can still display a snapshot while validation is in flight.
+            let mut on_validate = self.menus.borrow_mut().on_validate.take();
+            let enabled = on_validate
+                .as_mut()
+                .is_none_or(|validate| validate(action.as_ref()));
+            self.menus.borrow_mut().on_validate = on_validate;
+            if !enabled {
+                continue;
             }
             log::info!("Dispatching OHOS menu action {id}");
             let mut on_action = self.menus.borrow_mut().on_action.take();
@@ -1216,7 +1223,7 @@ impl OhosPlatform {
                     log::error!("Failed to resolve incoming OHOS file: {error:#}");
                     if let Some(app) = self.app.borrow().clone() {
                         self.background_executor
-                            .spawn(show_file_error(
+                            .spawn(show_platform_error(
                                 app,
                                 0,
                                 "Unable to open file",
@@ -1625,7 +1632,7 @@ pub(super) fn retain_file_access(
             if let Err(error) = file_access.remember(&uris) {
                 warn!("Could not save incoming file access: {error:#}");
                 if let Some(app) = app {
-                    show_file_error(
+                    show_platform_error(
                         app,
                         window_id,
                         "File access could not be saved",
@@ -1640,7 +1647,7 @@ pub(super) fn retain_file_access(
         .detach();
 }
 
-pub(super) async fn show_file_error(
+pub(super) async fn show_platform_error(
     app: OpenHarmonyApp,
     window_id: i64,
     message: &'static str,
@@ -1662,7 +1669,7 @@ pub(super) async fn show_file_error(
     }
     .await;
     if let Err(error) = result {
-        log::error!("Failed to show OHOS file-open error: {error:#}");
+        log::error!("Failed to show OHOS platform error: {error:#}");
     }
 }
 
@@ -1683,9 +1690,11 @@ fn normalize_open_uri(uri: String) -> Result<(String, Option<String>)> {
         .map_err(|()| anyhow::anyhow!("File URI resolved to a non-absolute path: {path}"))
 }
 
-fn selected_paths(
+async fn selected_paths(
     uris: Vec<String>,
     file_access: &super::file_access::FileAccess,
+    app: OpenHarmonyApp,
+    window_id: i64,
 ) -> Result<Option<Vec<PathBuf>>> {
     if uris.is_empty() {
         return Ok(None);
@@ -1693,6 +1702,9 @@ fn selected_paths(
     let paths = resolve_file_paths(&uris)?;
     if let Err(error) = file_access.remember(&uris) {
         warn!("Could not save file picker access: {error:#}");
+        show_platform_error(app, window_id, "File access could not be saved", format!(
+            "This selection is available now, but you may need to select it again after restarting.\n\n{error:#}"
+        )).await;
     }
     Ok(Some(paths))
 }
@@ -1875,37 +1887,43 @@ impl Platform for OhosPlatform {
             return;
         };
         let platform = self.clone();
-        let background = self.background_executor.clone();
-        // The system restart kills the process without onDestroy. Defer until
-        // AppCell is released and run GPUI's shutdown hooks before requesting it.
+        let window_id = self
+            .windows
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find_map(|window| {
+                let window = window.borrow();
+                window.is_active().then_some(window.window_id())
+            })
+            .unwrap_or(0);
+        let request = self.background_executor.spawn({
+            let app = app.clone();
+            async move {
+                let response = app.bridge()?.call_sync_from_worker::<
+                    AppControlBridgePlugin, RestartRequest, RestartResponse
+                >("restart", RestartRequest {}).await?;
+                anyhow::ensure!(
+                    response.accepted,
+                    "OpenHarmony app-control plugin rejected restart"
+                );
+                Ok::<(), anyhow::Error>(())
+            }
+        });
         self.foreground_executor
             .spawn(async move {
-                if !platform.prepare_quit() {
-                    return;
+                match request.await {
+                    Ok(()) => {
+                        // The SDK can reject restart. Destructive shutdown is safe only after
+                        // acceptance; callers must persist restart state before requesting it.
+                        platform.prepare_quit();
+                    }
+                    Err(error) => {
+                        warn!("Failed to restart OpenHarmony application: {error:#}");
+                        show_platform_error(app, window_id, "Restart failed", error.to_string())
+                            .await;
+                    }
                 }
-                background
-                    .spawn(async move {
-                        let result = async {
-                            let response = app
-                                .bridge()?
-                                .call_sync_from_worker::<
-                                    AppControlBridgePlugin,
-                                    RestartRequest,
-                                    RestartResponse,
-                                >("restart", RestartRequest {})
-                                .await?;
-                            anyhow::ensure!(
-                                response.accepted,
-                                "OpenHarmony app-control plugin rejected restart"
-                            );
-                            Ok::<(), anyhow::Error>(())
-                        }
-                        .await;
-                        if let Err(error) = result {
-                            warn!("Failed to restart OpenHarmony application: {error}");
-                        }
-                    })
-                    .detach();
             })
             .detach();
     }
@@ -2347,7 +2365,13 @@ impl Platform for OhosPlatform {
                     let mut options = FileDialogOptions::new(kind).allow_many(options.multiple);
                     options.parent_window_id = parent_window_id;
                     let response = app.show_file_dialog(options).await?;
-                    selected_paths(response.files, &file_access)
+                    selected_paths(
+                        response.files,
+                        &file_access,
+                        app,
+                        parent_window_id.unwrap_or(0),
+                    )
+                    .await
                 }
                 .await;
                 tx.send(result).ok();
@@ -2390,8 +2414,14 @@ impl Platform for OhosPlatform {
                     options.suggested_name = suggested_name;
                     options.parent_window_id = parent_window_id;
                     let response = app.show_file_dialog(options).await?;
-                    Ok(selected_paths(response.files, &file_access)?
-                        .and_then(|mut paths| paths.pop()))
+                    Ok(selected_paths(
+                        response.files,
+                        &file_access,
+                        app,
+                        parent_window_id.unwrap_or(0),
+                    )
+                    .await?
+                    .and_then(|mut paths| paths.pop()))
                 }
                 .await;
                 tx.send(result).ok();
