@@ -13,6 +13,7 @@ use futures::{
     FutureExt,
     channel::oneshot,
     future::{LocalBoxFuture, Shared},
+    lock::Mutex,
 };
 use openharmony_ability::OpenHarmonyApp;
 use openharmony_ability_plugin_clipboard::{
@@ -27,6 +28,7 @@ pub(crate) struct OhosClipboard {
     operation: Rc<Cell<u64>>,
     refresh_pending: Rc<Cell<bool>>,
     write_tail: Rc<RefCell<Option<Shared<LocalBoxFuture<'static, ()>>>>>,
+    read_lock: Rc<Mutex<()>>,
 }
 
 impl OhosClipboard {
@@ -41,6 +43,7 @@ impl OhosClipboard {
             operation: Rc::new(Cell::new(0)),
             refresh_pending: Rc::new(Cell::new(false)),
             write_tail: Rc::new(RefCell::new(None)),
+            read_lock: Rc::new(Mutex::new(())),
         }
     }
 
@@ -71,7 +74,9 @@ impl OhosClipboard {
             let clipboard = self.clone();
             self.foreground_executor
                 .spawn(async move {
-                    let _ = clipboard.read().await;
+                    if let Err(error) = clipboard.read_with_permission(false).await {
+                        log::debug!("OHOS clipboard cache refresh failed: {error}");
+                    }
                     clipboard.refresh_pending.set(false);
                 })
                 .detach();
@@ -82,48 +87,92 @@ impl OhosClipboard {
     pub(crate) fn read(
         &self,
     ) -> Task<std::result::Result<Option<ClipboardItem>, ClipboardReadError>> {
+        self.read_with_permission(true)
+    }
+
+    fn read_with_permission(
+        &self,
+        authorize: bool,
+    ) -> Task<std::result::Result<Option<ClipboardItem>, ClipboardReadError>> {
         let Some(app) = self.app.borrow().clone() else {
             return Task::ready(Err(ClipboardReadError::Unavailable));
         };
+        let pending_write = self.write_tail.borrow().clone();
+        let write_is_complete = pending_write
+            .as_ref()
+            .is_none_or(|pending| pending.clone().now_or_never().is_some());
+        // A current cache entry should stay ready: moving every paste across an
+        // await boundary changes the ordering of subsequent editing commands.
+        if write_is_complete {
+            let revision = Self::revision(&app);
+            if let Some((cached_revision, item)) = self.cache.borrow().as_ref()
+                && Some(*cached_revision) == revision
+            {
+                return Task::ready(Ok(Some(item.clone())));
+            }
+        }
         let clipboard = self.clone();
         let operation = self.next_operation();
-        let pending_write = self.write_tail.borrow().clone();
-        self.foreground_executor.spawn(async move {
-            if let Some(pending) = pending_write {
-                pending.await;
-            }
-            let revision = Self::revision(&app);
-            let client = ClipboardClient::new(&app)
-                .map_err(|error| ClipboardReadError::Denied(error.to_string()))?;
-            let records = client
-                .read_records()
-                .await
-                .map_err(|error| ClipboardReadError::Denied(error.to_string()))?;
-            let mut entries = Vec::with_capacity(records.len());
-            for record in records {
-                if let Some(text) = record.text {
-                    entries.push(ClipboardEntry::String(ClipboardString {
-                        text,
-                        metadata: record.metadata,
-                    }));
-                } else if let Some(bytes) = record.encoded_image {
-                    entries.push(ClipboardEntry::Image(Image::from_bytes(
-                        ImageFormat::Png,
-                        bytes,
-                    )));
-                } else if let Some(uri) = record.uri {
-                    let path = ohos_fileuri_binding::get_path_from_uri(&uri)
-                        .map_err(|_| ClipboardReadError::UnsupportedContent)?;
-                    entries.push(ClipboardEntry::ExternalPaths(ExternalPaths(
-                        smallvec::smallvec![PathBuf::from(path)],
-                    )));
+        let (sender, receiver) = oneshot::channel();
+        self.foreground_executor
+            .spawn(async move {
+                if let Some(pending) = pending_write {
+                    pending.await;
                 }
-            }
-            let item = (!entries.is_empty()).then_some(ClipboardItem { entries });
-            if clipboard.operation.get() == operation && revision == Self::revision(&app) {
-                *clipboard.cache.borrow_mut() = revision.zip(item.clone());
-            }
-            Ok(item)
+                // Overlapping SDK reads can return an empty snapshot while a native
+                // deferred clipboard producer is still materializing its records.
+                let _read_guard = clipboard.read_lock.lock().await;
+                if sender.is_canceled() {
+                    return;
+                }
+                // Dropping a bridge receiver does not cancel its SDK promise, so the
+                // detached worker must keep the guard until that promise completes.
+                let result = async {
+                    let revision = Self::revision(&app);
+                    let client = ClipboardClient::new(&app)
+                        .map_err(|error| ClipboardReadError::Denied(error.to_string()))?;
+                    let records = if authorize {
+                        client.read_authorized_records().await
+                    } else {
+                        client.read_records().await
+                    }
+                    .map_err(|error| ClipboardReadError::Denied(error.to_string()))?;
+                    let mut entries = Vec::with_capacity(records.len());
+                    for record in records {
+                        if let Some(text) = record.text {
+                            entries.push(ClipboardEntry::String(ClipboardString {
+                                text,
+                                metadata: record.metadata,
+                            }));
+                        } else if let Some(bytes) = record.encoded_image {
+                            entries.push(ClipboardEntry::Image(Image::from_bytes(
+                                ImageFormat::Png,
+                                bytes,
+                            )));
+                        } else if let Some(uri) = record.uri {
+                            let path = ohos_fileuri_binding::get_path_from_uri(&uri)
+                                .map_err(|_| ClipboardReadError::UnsupportedContent)?;
+                            entries.push(ClipboardEntry::ExternalPaths(ExternalPaths(
+                                smallvec::smallvec![PathBuf::from(path)],
+                            )));
+                        }
+                    }
+                    let item = (!entries.is_empty()).then_some(ClipboardItem { entries });
+                    if clipboard.operation.get() == operation && revision == Self::revision(&app) {
+                        *clipboard.cache.borrow_mut() = revision.zip(item.clone());
+                    }
+                    Ok(item)
+                }
+                .await;
+                if let Err(Err(error)) = sender.send(result) {
+                    log::debug!("Abandoned OHOS clipboard read failed: {error}");
+                }
+            })
+            .detach();
+        self.foreground_executor.spawn(async move {
+            receiver
+                .await
+                .unwrap_or(Err(ClipboardReadError::Unavailable))
         })
     }
 

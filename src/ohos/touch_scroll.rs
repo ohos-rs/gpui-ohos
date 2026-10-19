@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     DispatchEventResult, GestureTuning, LongPressEvent, Modifiers, MouseButton, MouseDownEvent,
-    MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent, TouchEvent, TouchId,
-    TouchPhase, point, px,
+    MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent,
+    TouchEvent, TouchId, TouchPhase, point, px,
 };
 
 const MAX_FLING_SPEED: f32 = 8000.;
@@ -62,6 +62,10 @@ enum ContactKind {
         long_press_offered: bool,
     },
     CoreDrag,
+    WindowControl {
+        click_count: usize,
+        dragged: bool,
+    },
     Pan {
         axis: Option<Axis>,
     },
@@ -173,6 +177,32 @@ impl TouchScroll {
                     && (event.position - contact.start).magnitude()
                         <= f64::from(self.tuning.touch_slop);
             }
+            ContactKind::WindowControl {
+                click_count,
+                mut dragged,
+            } => {
+                dragged |= (event.position - contact.start).magnitude()
+                    > f64::from(self.tuning.touch_slop);
+                contact.kind = ContactKind::WindowControl {
+                    click_count,
+                    dragged,
+                };
+                if ended {
+                    tapped = event.phase == TouchPhase::Ended && !dragged;
+                    self.last_tap = tapped.then_some(LastTap {
+                        position: event.position,
+                        time: now,
+                        count: click_count,
+                    });
+                    release_window_control(&event, click_count, tapped, &mut emit);
+                } else {
+                    emit(PlatformInput::MouseMove(MouseMoveEvent {
+                        position: event.position,
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: Modifiers::default(),
+                    }));
+                }
+            }
             ContactKind::Pending { .. } => {
                 if event.phase == TouchPhase::Ended
                     && !contact.caught
@@ -231,6 +261,55 @@ impl TouchScroll {
         tapped
     }
 
+    pub(crate) fn capture_window_control(
+        &mut self,
+        id: TouchId,
+        now: Instant,
+        mut emit: impl FnMut(PlatformInput) -> DispatchEventResult,
+    ) -> bool {
+        let Some(contact) = self.contact.as_mut().filter(|contact| {
+            contact.event.id == id
+                && matches!(contact.kind, ContactKind::Pending { .. })
+                && !contact.caught
+                && !contact.raw_ended
+        }) else {
+            return false;
+        };
+        let click_count = self
+            .last_tap
+            .as_ref()
+            .filter(|tap| {
+                now.saturating_duration_since(tap.time) <= self.tuning.multi_tap_interval
+                    && (contact.start - tap.position).magnitude()
+                        <= f64::from(self.tuning.multi_tap_slop)
+            })
+            .map_or(1, |tap| tap.count.saturating_add(1));
+        contact.kind = ContactKind::WindowControl {
+            click_count,
+            dragged: false,
+        };
+        // The press must reach title-bar controls before a native move starts,
+        // so their ordinary stop-propagation/default handling still applies.
+        emit(PlatformInput::MouseDown(MouseDownEvent {
+            button: MouseButton::Left,
+            position: contact.start,
+            modifiers: Modifiers::default(),
+            click_count,
+            first_mouse: false,
+        }));
+        true
+    }
+
+    pub(crate) fn cancel_window_control_click(&mut self) {
+        if let Some(Contact {
+            kind: ContactKind::WindowControl { dragged, .. },
+            ..
+        }) = self.contact.as_mut()
+        {
+            *dragged = true;
+        }
+    }
+
     /// ArkUI owns acceptance, displacement and velocity. Its first accepted
     /// delta must move immediately; later packets are already incremental.
     pub(crate) fn native_pan(
@@ -247,6 +326,11 @@ impl TouchScroll {
             return;
         }
         match input.phase {
+            TouchPhase::Started if matches!(contact.kind, ContactKind::WindowControl { .. }) => {
+                if let ContactKind::WindowControl { dragged, .. } = &mut contact.kind {
+                    *dragged = true;
+                }
+            }
             TouchPhase::Started
                 if matches!(contact.kind, ContactKind::Pending { .. }) && !contact.raw_ended =>
             {
@@ -403,6 +487,9 @@ impl TouchScroll {
                     contact.event.phase = TouchPhase::Cancelled;
                     emit(PlatformInput::Touch(contact.event));
                 }
+                ContactKind::WindowControl { click_count, .. } => {
+                    release_window_control(&contact.event, click_count, false, emit);
+                }
                 ContactKind::Pan { .. } => {
                     emit(scroll(
                         contact.start,
@@ -434,6 +521,29 @@ impl TouchScroll {
     }
 }
 
+fn release_window_control(
+    event: &TouchEvent,
+    click_count: usize,
+    tapped: bool,
+    emit: &mut impl FnMut(PlatformInput) -> DispatchEventResult,
+) {
+    // GPUI's mouse-up capture clears pressed controls even outside the viewport;
+    // releasing there cancels a touch drag without activating the pressed button.
+    emit(PlatformInput::MouseUp(MouseUpEvent {
+        button: MouseButton::Left,
+        position: if tapped {
+            event.position
+        } else {
+            point(px(-1.), px(-1.))
+        },
+        modifiers: Modifiers::default(),
+        click_count,
+    }));
+    let mut cancel = event.clone();
+    cancel.phase = TouchPhase::Cancelled;
+    emit(PlatformInput::Touch(cancel));
+}
+
 fn scroll(position: Point<Pixels>, delta: Point<Pixels>, touch_phase: TouchPhase) -> PlatformInput {
     PlatformInput::ScrollWheel(ScrollWheelEvent {
         position,
@@ -446,6 +556,123 @@ fn scroll(position: Point<Pixels>, delta: Point<Pixels>, touch_phase: TouchPhase
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_control_press_precedes_movement_and_pan_does_not_scroll() {
+        let mut scroll = TouchScroll::default();
+        let now = Instant::now();
+        raw(&mut scroll, TouchPhase::Started, now, 20., 10.);
+        let mut presses = Vec::new();
+        assert!(scroll.capture_window_control(TouchId(1), now, |event| {
+            presses.push(event);
+            DispatchEventResult::default()
+        }));
+        assert!(
+            matches!(presses.as_slice(), [PlatformInput::MouseDown(event)] if event.position == point(px(20.), px(10.)))
+        );
+        assert!(scroll.pending_long_press(now).is_none());
+        let (_, movement) = raw(&mut scroll, TouchPhase::Moved, now, 50., 30.);
+        assert!(
+            matches!(movement.as_slice(), [PlatformInput::MouseMove(event)] if event.pressed_button == Some(MouseButton::Left))
+        );
+        for phase in [TouchPhase::Started, TouchPhase::Moved, TouchPhase::Ended] {
+            assert!(
+                pan(
+                    &mut scroll,
+                    phase,
+                    point(px(30.), px(20.)),
+                    point(1000., 1000.),
+                    now
+                )
+                .is_empty()
+            );
+        }
+        let (tapped, released) = raw(&mut scroll, TouchPhase::Ended, now, 50., 30.);
+        assert!(!tapped);
+        assert!(
+            matches!(released.as_slice(), [PlatformInput::MouseUp(event), PlatformInput::Touch(touch)] if event.position == point(px(-1.), px(-1.)) && touch.phase == TouchPhase::Cancelled)
+        );
+        assert!(!scroll.has_momentum());
+        assert!(scroll.contact.is_none());
+    }
+
+    #[test]
+    fn window_control_taps_keep_click_count_without_a_second_press() {
+        let mut scroll = TouchScroll::default();
+        let now = Instant::now();
+        for count in 1..=2 {
+            raw(&mut scroll, TouchPhase::Started, now, 20., 10.);
+            assert!(scroll.capture_window_control(TouchId(1), now, |event| {
+                assert!(
+                    matches!(event, PlatformInput::MouseDown(event) if event.click_count == count)
+                );
+                DispatchEventResult::default()
+            }));
+            let (tapped, released) = raw(&mut scroll, TouchPhase::Ended, now, 20., 10.);
+            assert!(tapped);
+            assert!(
+                matches!(released.as_slice(), [PlatformInput::MouseUp(event), PlatformInput::Touch(_)] if event.position == point(px(20.), px(10.)) && event.click_count == count)
+            );
+        }
+    }
+
+    #[test]
+    fn moving_window_cancels_click_even_when_local_touch_position_is_unchanged() {
+        let mut scroll = TouchScroll::default();
+        let now = Instant::now();
+        raw(&mut scroll, TouchPhase::Started, now, 20., 10.);
+        assert!(scroll.capture_window_control(TouchId(1), now, |_| DispatchEventResult::default()));
+        scroll.cancel_window_control_click();
+        let (tapped, released) = raw(&mut scroll, TouchPhase::Ended, now, 20., 10.);
+        assert!(!tapped);
+        assert!(
+            matches!(released.first(), Some(PlatformInput::MouseUp(event)) if event.position == point(px(-1.), px(-1.)))
+        );
+        assert!(scroll.last_tap.is_none());
+    }
+
+    #[test]
+    fn window_control_cancellation_releases_press_and_secondary_contact_cannot_take_over() {
+        let mut scroll = TouchScroll::default();
+        let now = Instant::now();
+        raw(&mut scroll, TouchPhase::Started, now, 20., 10.);
+        assert!(!scroll.capture_window_control(TouchId(2), now, |_| panic!("secondary press")));
+        assert!(scroll.capture_window_control(TouchId(1), now, |_| DispatchEventResult::default()));
+        scroll.relay(touch(2, TouchPhase::Started, 50., 50.), now, |_| {
+            panic!("secondary contact")
+        });
+        scroll.relay(touch(2, TouchPhase::Ended, 50., 50.), now, |_| {
+            panic!("secondary release")
+        });
+        let mut cancelled = Vec::new();
+        scroll.cancel(|event| {
+            cancelled.push(event);
+            DispatchEventResult::default()
+        });
+        assert!(
+            matches!(cancelled.as_slice(), [PlatformInput::MouseUp(event), PlatformInput::Touch(touch)] if event.position == point(px(-1.), px(-1.)) && touch.phase == TouchPhase::Cancelled)
+        );
+        assert!(scroll.contact.is_none());
+        raw(&mut scroll, TouchPhase::Started, now, 20., 10.);
+        assert!(scroll.capture_window_control(TouchId(1), now, |_| DispatchEventResult::default()));
+    }
+
+    #[test]
+    fn window_control_cannot_steal_a_claimed_core_drag() {
+        let mut scroll = TouchScroll::default();
+        let now = Instant::now();
+        scroll.relay(touch(1, TouchPhase::Started, 20., 10.), now, |_| {
+            DispatchEventResult {
+                default_prevented: true,
+                ..DispatchEventResult::default()
+            }
+        });
+        assert!(!scroll.capture_window_control(TouchId(1), now, |_| panic!("claimed drag")));
+        let (_, moved) = raw(&mut scroll, TouchPhase::Moved, now, 50., 30.);
+        assert!(
+            matches!(moved.as_slice(), [PlatformInput::Touch(event)] if event.phase == TouchPhase::Moved)
+        );
+    }
 
     fn touch(id: u64, phase: TouchPhase, x: f32, y: f32) -> TouchEvent {
         TouchEvent {

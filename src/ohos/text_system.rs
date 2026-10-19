@@ -1,7 +1,8 @@
 use anyhow::{Context as _, Result};
 use cosmic_text::{
-    Attrs, AttrsList, CacheKey, Family, Font as CosmicTextFont, FontFeatures as CosmicFontFeatures,
-    FontSystem, ShapeBuffer, ShapeLine, SwashCache, SwashContent,
+    Attrs, AttrsList, CacheKey, Fallback, Family, Font as CosmicTextFont,
+    FontFeatures as CosmicFontFeatures, FontSystem, PlatformFallback, ShapeBuffer, ShapeLine,
+    SwashCache, SwashContent,
 };
 use gpui::{
     Bounds, DevicePixels, Font, FontFeatures, FontId, FontMetrics, FontRun, FontStyle, FontWeight,
@@ -15,8 +16,73 @@ use parking_lot::RwLock;
 use rustc_hash::FxHashMap as HashMap;
 use smallvec::SmallVec;
 use std::{borrow::Cow, path::Path, sync::Arc};
+use unicode_script::Script;
 
 pub(crate) struct OhosTextSystem(RwLock<OhosTextSystemState>);
+
+struct OhosFontFallback;
+
+impl OhosFontFallback {
+    fn han_fallback(locale: &str) -> &'static [&'static str] {
+        let mut components = locale.split(['-', '_']);
+        let language = components.next().unwrap_or_default();
+        if language.eq_ignore_ascii_case("ja") {
+            return &["Noto Sans CJK JP"];
+        }
+        if language.eq_ignore_ascii_case("ko") {
+            return &["Noto Sans CJK KR"];
+        }
+        let mut traditional = false;
+        for component in components {
+            if component.eq_ignore_ascii_case("HK") || component.eq_ignore_ascii_case("MO") {
+                return &["Noto Sans CJK HK", "HarmonyOS Sans TC", "Noto Sans CJK TC"];
+            }
+            traditional |=
+                component.eq_ignore_ascii_case("Hant") || component.eq_ignore_ascii_case("TW");
+        }
+        if traditional {
+            &["HarmonyOS Sans TC", "Noto Sans CJK TC"]
+        } else {
+            &["HarmonyOS Sans SC", "Noto Sans CJK SC"]
+        }
+    }
+}
+
+impl Fallback for OhosFontFallback {
+    fn common_fallback(&self) -> &[&'static str] {
+        // Match the system's installed families before scanning every face.
+        // Its commonly used HarmonyOS fonts also avoid cold Noto CJK page reads.
+        &[
+            "HMOS Color Emoji",
+            "Noto Color Emoji",
+            "HarmonyOS Sans",
+            "Noto Sans",
+            "Noto Sans Mono",
+            "Noto Sans Symbols",
+            "Noto Sans Symbols 2",
+            "Noto Sans Symbols2",
+        ]
+    }
+
+    fn forbidden_fallback(&self) -> &[&'static str] {
+        PlatformFallback.forbidden_fallback()
+    }
+
+    fn script_fallback(&self, script: Script, locale: &str) -> &[&'static str] {
+        match script {
+            Script::Han => Self::han_fallback(locale),
+            Script::Bopomofo => &["HarmonyOS Sans TC", "Noto Sans CJK TC"],
+            Script::Hiragana | Script::Katakana => &["Noto Sans CJK JP"],
+            Script::Hangul => &["Noto Sans CJK KR"],
+            Script::Arabic => &[
+                "HarmonyOS Sans Naskh Arabic UI",
+                "Noto Naskh Arabic UI",
+                "Noto Sans Arabic",
+            ],
+            _ => PlatformFallback.script_fallback(script, locale),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct FontKey {
@@ -59,8 +125,18 @@ struct LoadedFont {
 }
 
 impl OhosTextSystem {
-    pub(crate) fn new() -> Self {
-        let font_system = FontSystem::new();
+    pub(crate) fn new(locale: String) -> Self {
+        let locale = if locale.is_empty() {
+            "en-US".to_owned()
+        } else {
+            locale
+        };
+        let mut database = cosmic_text::fontdb::Database::new();
+        database.set_sans_serif_family("HarmonyOS Sans");
+        database.set_serif_family("Noto Serif");
+        database.set_monospace_family("Noto Sans Mono");
+        let font_system =
+            FontSystem::new_with_locale_and_db_and_fallback(locale, database, OhosFontFallback);
 
         Self(RwLock::new(OhosTextSystemState {
             font_system,
@@ -75,7 +151,7 @@ impl OhosTextSystem {
 
 impl Default for OhosTextSystem {
     fn default() -> Self {
-        Self::new()
+        Self::new(String::new())
     }
 }
 
