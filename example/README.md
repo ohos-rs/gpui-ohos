@@ -45,7 +45,8 @@ Studio, or set `signingConfigs` and the product's `signingConfig` in
 `build-profile.json5`. Then build with DevEco Studio or its command-line tools:
 
 ```sh
-ohpm install --all
+cargo install ohpm-cli --version 0.3.0 --locked
+ohpm-rs install --all
 hvigorw assembleHap --mode module -p product=default
 ```
 
@@ -59,3 +60,9 @@ a signing profile whose ACL grants it, and runtime permission. The example
 declares and requests the permission; the local signing profile must provide
 the matching ACL. Notifications and screen capture may also prompt for system
 authorization.
+
+The source packages use `workspace:*` dependencies, which require `ohpm-rs` for
+installation. The native and ArkTS dependencies use the same pinned Ability
+submodule. Run
+`git submodule update --init --recursive` before building either side. The native
+render exports receive the actual native window ID from this matching runtime.

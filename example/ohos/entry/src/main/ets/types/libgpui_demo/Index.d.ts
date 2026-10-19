@@ -727,6 +727,6 @@ export declare function onBridgeLifecycle(kind: string): void
   */
 export declare function onBridgeSyncEvent(pluginId: string, event: string, requestTypeName: string, responseTypeName: string, value: unknown): unknown
 
-export declare function render(slot: NodeContent, renderOwner: string): void
+export declare function render(slot: NodeContent, renderOwner: string, nativeWindowId: number): void
 
-export declare function renderWindow(slot: NodeContent, renderOwner: string, windowId: number): void
+export declare function renderWindow(slot: NodeContent, renderOwner: string, windowId: number, nativeWindowId: number): void

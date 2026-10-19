@@ -1,6 +1,6 @@
 [workspace]
 members = []
-exclude = ["example", "tests/touch"]
+exclude = ["example", "tests/touch", "example/ohos/vendor/openharmony-ability", "example/ohos/vendor/openharmony-ability/crates/*"]
 resolver = "2"
 
 [workspace.package]
@@ -17,7 +17,7 @@ cosmic-text = "0.17.0"
 etagere = "0.2"
 font-kit = { package = "zed-font-kit", version = "0.14.1-zed", git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", features = ["source-fontconfig-dlopen"] }
 futures = "0.3.34"
-gpui = { git = "https://github.com/ohos-rs/zed", rev = "f45c7c22d0", default-features = false }
+gpui = { git = "https://github.com/ohos-rs/zed", rev = "53b61873bf3d10d59b6e56a5c33228f48562f8f0", default-features = false }
 itertools = "0.14.0"
 image = { version = "0.25.1", default-features = false }
 log = "0.4"
@@ -29,16 +29,16 @@ ohos-vsync-binding = { version = "0.3.1", default-features = false, features = [
 napi-ohos = "=1.2.0"
 napi-derive-ohos = "=1.2.0"
 # GPUI uses owned ArkUI key events, mouse cancellation, and native file drag/drop on every backend.
-openharmony-ability = { version = "=1.0.0-beta.3", features = ["keyboard", "mouse", "drag"] }
-openharmony-ability-plugin-menu = "=1.0.0-beta.3"
-openharmony-ability-plugin-notification = "=1.0.0-beta.3"
-openharmony-ability-plugin-system-state = "=1.0.0-beta.3"
-openharmony-ability-plugin-app-control = "=1.0.0-beta.3"
-openharmony-ability-plugin-clipboard = "=1.0.0-beta.3"
-openharmony-ability-plugin-files = "=1.0.0-beta.3"
-openharmony-ability-plugin-process = "=1.0.0-beta.3"
-openharmony-ability-plugin-url = "=1.0.0-beta.3"
-openharmony-ability-plugin-window = "=1.0.0-beta.3"
+openharmony-ability = { path = "example/ohos/vendor/openharmony-ability/crates/ability", version = "=1.0.0-beta.3", features = ["keyboard", "mouse", "drag"] }
+openharmony-ability-plugin-menu = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-menu", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-notification = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-notification", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-system-state = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-system-state", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-app-control = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-app-control", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-clipboard = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-clipboard", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-files = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-files", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-process = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-process", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-url = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-url", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-window = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-window", version = "=1.0.0-beta.3" }
 parking_lot = "0.12.1"
 profiling = "1"
 serde = { version = "1", features = ["derive"] }
@@ -50,6 +50,7 @@ sha2 = "0.10"
 smol = "2.0"
 uuid = { version = "1.1.2", features = ["v4", "v5", "v7", "serde"] }
 url = "2"
+unicode-script = "0.5"
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "8b419de0906f37af69d728f1735132e427a3436f", default-features = false, features = ["parking_lot", "std", "wgsl"] }
 
 [package]
@@ -102,6 +103,7 @@ openharmony-ability-plugin-process.workspace = true
 napi-ohos.workspace = true
 napi-derive-ohos.workspace = true
 url.workspace = true
+unicode-script.workspace = true
 openharmony-ability-plugin-url.workspace = true
 openharmony-ability-plugin-window.workspace = true
 parking_lot.workspace = true

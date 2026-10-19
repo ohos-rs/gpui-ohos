@@ -13,15 +13,15 @@ test = false
 
 [dependencies]
 anyhow = "1"
-gpui = { git = "https://github.com/ohos-rs/zed", rev = "f45c7c22d0", default-features = false }
+gpui = { git = "https://github.com/ohos-rs/zed", rev = "53b61873bf3d10d59b6e56a5c33228f48562f8f0", default-features = false }
 gpui-ohos = { path = "..", default-features = false }
 log = "0.4"
 ohos-hilog-binding = { version = "*", features = ["log"] }
 napi-derive-ohos = "=1.2.0"
 napi-ohos = "=1.2.0"
-openharmony-ability = "=1.0.0-beta.3"
-openharmony-ability-derive = "=1.0.0-beta.3"
-openharmony-ability-plugin-permission = "=1.0.0-beta.3"
+openharmony-ability = { path = "ohos/vendor/openharmony-ability/crates/ability", version = "=1.0.0-beta.3" }
+openharmony-ability-derive = { path = "ohos/vendor/openharmony-ability/crates/derive", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-permission = { path = "ohos/vendor/openharmony-ability/crates/plugin-permission", version = "=1.0.0-beta.3" }
 
 [features]
 default = ["gles"]
@@ -34,3 +34,5 @@ napi-build-ohos = "=1.2.0"
 
 [workspace]
 resolver = "2"
+
+exclude = ["ohos/vendor/openharmony-ability", "ohos/vendor/openharmony-ability/crates/*"]

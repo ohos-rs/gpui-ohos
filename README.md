@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> Remove this line to confirm you've reviewed this PR before submitting.
+
 # gpui-ohos
 
 OpenHarmony platform backend for GPUI, with native windows, GPU rendering,
@@ -76,3 +79,36 @@ and [OHOS adaptation performance](./docs/ohos-performance.md).
 ## License
 
 [Apache-2.0](./LICENSE-APACHE) or [MIT](./LICENSE-MIT)
+
+## Desktop runtime adaptation
+
+The backend preserves native window ownership across workspace handoff, restores
+content focus around native menus, and keeps IME ownership separate from renderer
+Surface readiness. Physical deletion keeps the application's editing commands;
+handled completion shortcuts are consumed before the native IME. Clipboard reads
+are asynchronous and serialized through native completion, including cancellation.
+Picker results retain provider URIs and persisted access policies, and shared
+windows track native display density and refresh rate.
+
+Initialize the pinned Ability runtime before building:
+
+```sh
+git submodule update --init --recursive
+```
+
+Rust dependencies and the example's ArkTS packages use the same submodule commit.
+It includes unpublished runtime interfaces; using registry beta.3 for only one
+side of that interface is unsupported. The IME binding dependency is pinned by
+Ability to its public Git commit until a compatible release is available.
+
+Portable checks:
+
+```sh
+cargo test --manifest-path tests/touch/Cargo.toml
+cargo test --manifest-path tests/touch/Cargo.toml --features native-vsync
+cargo check --target aarch64-unknown-linux-ohos
+```
+
+Host checks substitute native window/frame APIs. Native creation-time input
+routing, task-center close confirmation and enforced provider permission behavior
+still need further work; this does not establish complete desktop parity.
