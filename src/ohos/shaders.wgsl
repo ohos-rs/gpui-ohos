@@ -1492,6 +1492,7 @@ struct PolySpriteVarying {
     @location(4) @interpolate(flat) corner_radii: vec4<f32>,
     @location(5) @interpolate(flat) grayscale: u32,
     @location(6) @interpolate(flat) opacity: f32,
+    @location(7) @interpolate(flat) premultiplied: u32,
 }
 
 @vertex
@@ -1515,6 +1516,7 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, sprite: PolySpriteVerte
     tile.bounds.size = sprite.tile_bounds_size;
 
     var out = PolySpriteVarying();
+    out.premultiplied = sprite.order_pad.y;
     out.position = to_device_position(unit_vertex, bounds);
     out.tile_position = to_tile_position(unit_vertex, tile);
     out.bounds_origin = bounds.origin;
@@ -1528,7 +1530,14 @@ fn vs_poly_sprite(@builtin(vertex_index) vertex_id: u32, sprite: PolySpriteVerte
 
 @fragment
 fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
-    let sample = textureSample(t_sprite, s_sprite, input.tile_position);
+    // Evaluate derivatives uniformly, then use exact texels for native glyphs.
+    let filtered_sample = textureSample(t_sprite, s_sprite, input.tile_position);
+    var sample = filtered_sample;
+    if ((input.premultiplied & 2u) != 0u) {
+        let dimensions = textureDimensions(t_sprite);
+        let texel = clamp(vec2<i32>(floor(input.tile_position * vec2<f32>(dimensions))), vec2<i32>(0), vec2<i32>(dimensions) - vec2<i32>(1));
+        sample = textureLoad(t_sprite, texel, 0);
+    }
     // Alpha clip after using the derivatives.
     if (any(input.clip_distances < vec4<f32>(0.0))) {
         return vec4<f32>(0.0);
@@ -1551,7 +1560,17 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
         let grayscale = dot(color.rgb, GRAYSCALE_FACTORS);
         color = vec4<f32>(vec3<f32>(grayscale), sample.a);
     }
-    return blend_color(color, input.opacity * saturate(0.5 - distance));
+    let opacity = input.opacity * saturate(0.5 - distance);
+    if ((input.premultiplied & 1u) != 0u) {
+        // Preserve the source channels without integer demultiplication and
+        // requantization. Surface alpha mode determines the final encoding.
+        if (globals.premultiplied_alpha != 0u) {
+            return color * opacity;
+        }
+        let rgb = select(vec3<f32>(0.0), color.rgb / max(color.a, 0.000001), color.a > 0.0);
+        return vec4<f32>(rgb, color.a * opacity);
+    }
+    return blend_color(color, opacity);
 }
 
 // --- surfaces --- //

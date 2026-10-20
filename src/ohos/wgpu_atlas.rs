@@ -34,6 +34,7 @@ struct WgpuAtlasState {
     sampler: wgpu::Sampler,
     storage: WgpuAtlasStorage,
     tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
+    image_flags: FxHashMap<(AtlasTextureId, u32), u32>,
     pending_uploads: Vec<PendingUpload>,
 }
 
@@ -62,6 +63,7 @@ impl WgpuAtlas {
             sampler,
             storage: WgpuAtlasStorage::default(),
             tiles_by_key: Default::default(),
+            image_flags: Default::default(),
             pending_uploads: Vec::new(),
         }))
     }
@@ -76,6 +78,18 @@ impl WgpuAtlas {
         let texture = &lock.storage[id];
         WgpuTextureInfo {
             bind_group: texture.bind_group.clone(),
+        }
+    }
+
+    /// Encode private GPU instance flags without changing GPUI's scene ABI.
+    pub fn encode_image_alpha(&self, sprites: &mut [gpui::PolychromeSprite]) {
+        let state = self.0.lock();
+        for sprite in sprites {
+            sprite.pad = state
+                .image_flags
+                .get(&(sprite.tile.texture_id, sprite.tile.tile_id.0))
+                .copied()
+                .unwrap_or(0);
         }
     }
 }
@@ -95,6 +109,13 @@ impl PlatformAtlas for WgpuAtlas {
                 return Ok(None);
             };
             let tile = lock.allocate(size, key.texture_kind());
+            if let AtlasKey::Image(params) = &key {
+                let flags = super::image_alpha::flags(params.image_id);
+                if flags != 0 {
+                    lock.image_flags
+                        .insert((tile.texture_id, tile.tile_id.0), flags);
+                }
+            }
             lock.upload_texture(tile.texture_id, tile.bounds, &bytes);
             lock.tiles_by_key.insert(key, tile);
             Ok(Some(tile))
@@ -104,9 +125,11 @@ impl PlatformAtlas for WgpuAtlas {
     fn remove(&self, key: &AtlasKey) {
         let mut lock = self.0.lock();
 
-        let Some(id) = lock.tiles_by_key.remove(key).map(|tile| tile.texture_id) else {
+        let Some(tile) = lock.tiles_by_key.remove(key) else {
             return;
         };
+        lock.image_flags.remove(&(tile.texture_id, tile.tile_id.0));
+        let id = tile.texture_id;
 
         let Some(texture_slot) = lock.storage[id.kind].textures.get_mut(id.index as usize) else {
             return;

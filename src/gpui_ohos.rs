@@ -13,3 +13,5 @@ pub use ohos::{
     FontCatalog, FontDesignCoordinate, FontFaceData, GridLayoutError, GridLayoutRequest,
     GridTextCell, PlatformServices, SyntheticFontStyle,
 };
+
+pub use ohos::{PremultipliedImage, RasterImage};
