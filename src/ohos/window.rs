@@ -767,13 +767,7 @@ impl OhosWindow {
         self.window_id
     }
 
-    pub(crate) fn apply_appearance(&self, appearance: WindowAppearance) {
-        // Theme pickers distinguish application overrides from system changes.
-        // Reporting an override as a system change can undo the selected theme.
-        self.appearance.set(appearance);
-    }
-
-    fn set_appearance(&self, appearance: WindowAppearance) {
+    pub(crate) fn set_appearance(&self, appearance: WindowAppearance) {
         if self.appearance.replace(appearance) != appearance {
             let mut callback = self.callbacks.borrow_mut().appearance_changed.take();
             if let Some(ref mut callback) = callback {
@@ -2744,11 +2738,7 @@ impl OhosWindow {
                     .appearance_override
                     .get()
                     .unwrap_or_else(|| appearance_for_color_mode(configuration.color_mode));
-                if self.appearance_override.get().is_some() {
-                    self.apply_appearance(appearance);
-                } else {
-                    self.set_appearance(appearance);
-                }
+                self.set_appearance(appearance);
                 self.refresh_display();
             }
             Event::WindowDestroy => {
