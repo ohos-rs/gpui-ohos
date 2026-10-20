@@ -102,6 +102,12 @@ side of that interface is unsupported. The IME binding dependency is pinned by
 Ability to an exact Git commit until a compatible release is available. When
 sharing a local integration branch, publish its dependency commits first.
 
+Applications can set `App::set_native_prompt_style` to provide semantic dialog
+colors from their current theme. Native prompts convert GPUI RGBA colors to the
+Ability's ARGB contract. Omitting the style uses system colors; Ability handles
+alpha compositing and readable text/focus contrast without application-specific
+theme knowledge.
+
 IME attachment cancellation only signals the owning background worker; the
 worker completes native cleanup before another request for that editor runs.
 Terminal echo reconciliation belongs to the terminal implementation and is not

@@ -1265,6 +1265,7 @@ impl OhosPlatform {
                     buttons: vec!["Close".into()],
                     cancel_index: Some(0),
                     anchor: None,
+                    appearance: None,
                 })
                 .await?;
             Ok::<(), anyhow::Error>(())
@@ -1663,6 +1664,7 @@ pub(super) async fn show_platform_error(
                 buttons: vec!["OK".into()],
                 cancel_index: Some(0),
                 anchor: None,
+                appearance: None,
             })
             .await?;
         Ok::<(), anyhow::Error>(())
