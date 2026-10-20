@@ -10,15 +10,18 @@ mod frame_demand;
 mod image_alpha;
 mod keyboard;
 mod launch;
+mod mouse_buttons;
 #[cfg(feature = "native-vsync")]
 mod native_frames;
 mod path_targets;
 mod platform;
 mod platform_options;
+mod pointer_position;
 mod presentation;
 mod quad_pipeline;
 mod render_cache;
 mod screen_capture;
+mod scroll_input;
 mod task_queue;
 mod text_system;
 mod touch_scroll;
@@ -76,3 +79,6 @@ impl PlatformServices {
 }
 
 pub use image_alpha::{ImagePolicy, ImageRegistrationError, PremultipliedImage, RasterImage};
+
+pub use pointer_position::NativePointerPosition;
+pub use scroll_input::NativeScrollDelta;
