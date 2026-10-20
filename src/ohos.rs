@@ -51,3 +51,25 @@ pub fn current_platform(app: OpenHarmonyApp, _headless: bool) -> std::rc::Rc<dyn
             .unwrap_or_else(|_| panic!("Failed to initialize OHOS platform")),
     )
 }
+
+pub use text_system::{
+    FontCatalog, FontDesignCoordinate, FontFaceData, GridLayoutError, GridLayoutRequest,
+    GridTextCell, SyntheticFontStyle,
+};
+
+/// Platform and font services share face bytes, glyph IDs and immutable descriptors.
+pub struct PlatformServices {
+    pub platform: std::rc::Rc<dyn gpui::Platform>,
+    pub fonts: FontCatalog,
+}
+
+impl PlatformServices {
+    pub fn try_new(app: OpenHarmonyApp, options: PlatformOptions) -> anyhow::Result<Self> {
+        let platform = platform::OhosPlatform::new(app, options)?;
+        let fonts = platform.font_catalog();
+        Ok(Self {
+            platform: std::rc::Rc::new(platform),
+            fonts,
+        })
+    }
+}

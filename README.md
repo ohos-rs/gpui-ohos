@@ -214,3 +214,14 @@ Creation-time input is buffered
 until `PlatformWindow::on_input` is registered, and vetoed close requests restore
 window visibility and focus for task-center confirmation prompts. Enforced
 provider permission behavior still requires device verification.
+
+
+## Shared font services
+
+Embedders that need exact face bytes, synthetic styles or fixed-cell text can use
+`PlatformServices::try_new(app, PlatformOptions::default())`. Its `fonts` catalog
+shares immutable font IDs and face data with the returned GPUI platform. Ordinary
+UI text retains the platform's locale-aware fallback and bidirectional shaping.
+`layout_grid` is an explicit fixed-cell path; it does not replace document layout.
+Named instances preserve every original 16.16 axis coordinate, including width-only
+fonts. Explicit variation overrides retain the instance's other axes.
