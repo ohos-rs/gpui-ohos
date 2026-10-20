@@ -435,10 +435,10 @@ impl OhosWindow {
             .set(self.background_generation.get().wrapping_add(1));
         self.background_pending.set(false);
         // The native surface survives, but queued edits still belong to the closing editor.
-        if let Some(app) = self.app.borrow().as_ref() {
-            if let Err(error) = app.reset_ime_for(0) {
-                warn!("Failed to reset transferred OHOS editor: {error}");
-            }
+        if let Some(app) = self.app.borrow().as_ref()
+            && let Err(error) = app.reset_ime_for(0)
+        {
+            warn!("Failed to reset transferred OHOS editor: {error}");
         }
         let child_id = self.window_id;
         std::mem::swap(&mut self.window_id, &mut main.window_id);

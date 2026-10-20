@@ -123,3 +123,17 @@ cargo check --target aarch64-unknown-linux-ohos
 Host checks substitute native window/frame APIs. Native creation-time input
 routing, task-center close confirmation and enforced provider permission behavior
 still need further work; this does not establish complete desktop parity.
+
+
+## Shared font services
+
+Embedders that need exact face bytes, synthetic styles or fixed-cell text can use
+`PlatformServices::try_new(app, PlatformOptions::default())`. Its `fonts` catalog
+shares immutable font IDs and face data with the returned GPUI platform. Ordinary
+UI text retains the platform's locale-aware fallback and bidirectional shaping.
+`layout_grid` is an explicit fixed-cell path; it does not replace document layout.
+Named instances preserve every original 16.16 axis coordinate, including width-only
+fonts. Explicit variation overrides retain the instance's other axes.
+
+Host font regressions: `cargo test --manifest-path tests/text/Cargo.toml`.
+The small original font fixtures are reproducible with the generators in that directory.
