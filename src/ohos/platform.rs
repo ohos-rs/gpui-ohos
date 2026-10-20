@@ -2207,7 +2207,7 @@ impl Platform for OhosPlatform {
                 for window in windows {
                     window
                         .borrow()
-                        .set_appearance(appearance.unwrap_or(system_appearance));
+                        .apply_appearance(appearance.unwrap_or(system_appearance));
                 }
             })
             .detach();
