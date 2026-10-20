@@ -14,3 +14,5 @@ pub use ohos::{
 };
 #[cfg(feature = "grid")]
 pub use ohos::{GridLayoutError, GridLayoutRequest, GridTextCell};
+
+pub use ohos::{PremultipliedImage, RasterImage};

@@ -6,6 +6,7 @@ mod dispatcher;
 mod display;
 mod file_access;
 mod frame_delivery;
+mod image_alpha;
 mod frame_demand;
 mod keyboard;
 mod launch;
@@ -73,3 +74,5 @@ impl PlatformServices {
         })
     }
 }
+
+pub use image_alpha::{PremultipliedImage, RasterImage};
