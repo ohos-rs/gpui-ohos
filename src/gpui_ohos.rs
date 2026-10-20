@@ -15,3 +15,5 @@ pub use ohos::{
 };
 
 pub use ohos::{PremultipliedImage, RasterImage};
+
+pub use ohos::{NativePointerPosition, NativeScrollDelta};

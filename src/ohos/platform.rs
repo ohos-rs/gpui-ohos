@@ -333,6 +333,7 @@ fn menu_items(
                 text,
                 enabled,
                 accelerator,
+                accelerator_display_only: None,
                 // Keep the application's action dispatch while allowing ArkUI to
                 // acquire clipboard permission through its native paste control.
                 predefined_type: matches!(
@@ -2516,6 +2517,7 @@ impl Platform for OhosPlatform {
                     text: Some(menu.name.to_string()),
                     enabled: Some(!menu.disabled),
                     accelerator: None,
+                    accelerator_display_only: None,
                     predefined_type: None,
                     checked: None,
                     icon: None,

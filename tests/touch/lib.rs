@@ -409,3 +409,13 @@ pub fn check_persistent_permission(_: &[PolicyInfo]) -> anyhow::Result<Vec<bool>
 #[allow(dead_code)]
 #[path = "../../src/ohos/file_access.rs"]
 mod file_access;
+
+#[allow(dead_code)]
+#[path = "../../src/ohos/mouse_buttons.rs"]
+mod mouse_buttons;
+#[allow(dead_code)]
+#[path = "../../src/ohos/pointer_position.rs"]
+mod pointer_position;
+#[allow(dead_code)]
+#[path = "../../src/ohos/scroll_input.rs"]
+mod scroll_input;
