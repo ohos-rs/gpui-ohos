@@ -1,3 +1,4 @@
+mod audio;
 mod capture_pixels;
 mod clipboard;
 mod credentials;
@@ -87,3 +88,8 @@ pub use image_alpha::{ImagePolicy, ImageRegistrationError, PremultipliedImage, R
 pub use pointer_position::NativePointerPosition;
 #[cfg(feature = "native-input")]
 pub use scroll_input::NativeScrollDelta;
+
+pub use audio::{
+    AudioBridgePlugin, NativeAudioError, NativeAudioPlayer, NativeAudioPlayerOptions,
+    NativeAudioService,
+};
