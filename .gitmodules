@@ -1,3 +1,4 @@
 [submodule "example/ohos/vendor/openharmony-ability"]
 	path = example/ohos/vendor/openharmony-ability
 	url = https://github.com/harmony-contrib/openharmony-ability.git
+	branch = codex/native-prompt-style
