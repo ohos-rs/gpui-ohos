@@ -33,6 +33,7 @@ napi-ohos = "=1.2.0"
 napi-derive-ohos = "=1.2.0"
 # GPUI uses owned ArkUI key events, mouse cancellation, and native file drag/drop on every backend.
 openharmony-ability = { path = "example/ohos/vendor/openharmony-ability/crates/ability", version = "=1.0.0-beta.3", features = ["keyboard", "mouse", "drag"] }
+openharmony-ability-plugin-audio = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-audio", version = "=1.0.0-beta.3" }
 openharmony-ability-plugin-menu = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-menu", version = "=1.0.0-beta.3" }
 openharmony-ability-plugin-notification = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-notification", version = "=1.0.0-beta.3" }
 openharmony-ability-plugin-system-state = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-system-state", version = "=1.0.0-beta.3" }
@@ -95,6 +96,7 @@ ohos-fileuri-binding.workspace = true
 ohos-fileshare-binding.workspace = true
 ohos-vsync-binding = { workspace = true, optional = true }
 openharmony-ability.workspace = true
+openharmony-ability-plugin-audio.workspace = true
 openharmony-ability-plugin-menu.workspace = true
 openharmony-ability-plugin-notification.workspace = true
 openharmony-ability-plugin-system-state.workspace = true

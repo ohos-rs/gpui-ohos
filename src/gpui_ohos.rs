@@ -17,3 +17,8 @@ pub use ohos::{
 pub use ohos::{PremultipliedImage, RasterImage};
 
 pub use ohos::{NativePointerPosition, NativeScrollDelta};
+
+pub use ohos::{
+    AudioBridgePlugin, NativeAudioError, NativeAudioPlayer, NativeAudioPlayerOptions,
+    NativeAudioService,
+};

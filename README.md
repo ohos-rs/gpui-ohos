@@ -137,3 +137,14 @@ fonts. Explicit variation overrides retain the instance's other axes.
 
 Host font regressions: `cargo test --manifest-path tests/text/Cargo.toml`.
 The small original font fixtures are reproducible with the generators in that directory.
+
+
+## Optional file audio
+
+Register `gpui_ohos::AudioBridgePlugin` on the application's `OpenHarmonyApp` and
+add the matching `AudioPlugin` factory from `@ohos-rs/ability-plugin-audio` to its
+ArkTS entry. Then construct `NativeAudioService::new(app, foreground_executor)`.
+It rejects an unregistered Rust facade instead of silently adding a required HAR
+to every existing application. Players accept owned `File` values, serialize
+commands and retain each file until native descriptor duplication completes.
+Dropping a player queues release behind its pending playback updates.
