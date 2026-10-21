@@ -19,9 +19,9 @@ log = "0.4"
 ohos-hilog-binding = { version = "*", features = ["log"] }
 napi-derive-ohos = "=1.2.0"
 napi-ohos = "=1.2.0"
-openharmony-ability = { path = "ohos/vendor/openharmony-ability/crates/ability", version = "=1.0.0-beta.3" }
-openharmony-ability-derive = { path = "ohos/vendor/openharmony-ability/crates/derive", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-permission = { path = "ohos/vendor/openharmony-ability/crates/plugin-permission", version = "=1.0.0-beta.3" }
+openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "05ce9195ea66876dc64a9481a76f03abb2ea20db", version = "=1.0.0-beta.3" }
+openharmony-ability-derive = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "05ce9195ea66876dc64a9481a76f03abb2ea20db", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-permission = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "05ce9195ea66876dc64a9481a76f03abb2ea20db", version = "=1.0.0-beta.3" }
 
 [features]
 default = ["gles"]

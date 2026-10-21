@@ -4694,6 +4694,16 @@ impl PlatformWindow for OhosWindow {
         // Use WGPU renderer to render the scene.
         if let Some(ref mut renderer) = *self.renderer.borrow_mut() {
             let presentation = renderer.draw(scene);
+            if self.file_access.on_presentation(presentation) {
+                let file_access = self.file_access.clone();
+                self.background_executor
+                    .spawn(async move {
+                        if let Err(error) = file_access.restore() {
+                            warn!("Failed to restore OHOS file access: {error:#}");
+                        }
+                    })
+                    .detach();
+            }
             if self.presentation.record(presentation) {
                 self.frames.request();
             }

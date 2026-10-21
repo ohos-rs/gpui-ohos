@@ -428,7 +428,10 @@ impl OhosPlatform {
             }
         });
 
-        let file_access = Arc::new(super::file_access::FileAccess::new(app.base_path()));
+        let file_access = Arc::new(super::file_access::FileAccess::new(
+            app.base_path(),
+            options.persist_file_access,
+        ));
         let gpu_context = Arc::new(OnceLock::new());
         // EGL initialization can block in the emulator driver for several seconds.
         // WGPU owns this context and releases its thread binding between operations;
@@ -439,13 +442,7 @@ impl OhosPlatform {
                 .spawn({
                     let gpu_context = gpu_context.clone();
                     let dispatcher = dispatcher.clone();
-                    let file_access = file_access.clone();
                     move || {
-                        // Restored workspaces must regain their selected paths before the
-                        // launch callback starts filesystem reads. Keep the native IPC off UI.
-                        if let Err(error) = file_access.restore() {
-                            warn!("Failed to restore OHOS file access: {error:#}");
-                        }
                         let result = match std::panic::catch_unwind(WgpuContext::new) {
                             Ok(result) => {
                                 result.map(Arc::new).map_err(|error| format!("{error:#}"))
@@ -1630,7 +1627,7 @@ pub(super) fn retain_file_access(
     }
     executor
         .spawn(async move {
-            if let Err(error) = file_access.remember(&uris) {
+            if let Err(error) = file_access.remember(&uris, false) {
                 warn!("Could not save incoming file access: {error:#}");
                 if let Some(app) = app {
                     show_platform_error(
@@ -1697,12 +1694,13 @@ async fn selected_paths(
     file_access: &super::file_access::FileAccess,
     app: OpenHarmonyApp,
     window_id: i64,
+    writable: bool,
 ) -> Result<Option<Vec<PathBuf>>> {
     if uris.is_empty() {
         return Ok(None);
     }
     let paths = resolve_file_paths(&uris)?;
-    if let Err(error) = file_access.remember(&uris) {
+    if let Err(error) = file_access.remember(&uris, writable) {
         warn!("Could not save file picker access: {error:#}");
         show_platform_error(app, window_id, "File access could not be saved", format!(
             "This selection is available now, but you may need to select it again after restarting.\n\n{error:#}"
@@ -2372,6 +2370,7 @@ impl Platform for OhosPlatform {
                         &file_access,
                         app,
                         parent_window_id.unwrap_or(0),
+                        false,
                     )
                     .await
                 }
@@ -2421,6 +2420,7 @@ impl Platform for OhosPlatform {
                         &file_access,
                         app,
                         parent_window_id.unwrap_or(0),
+                        true,
                     )
                     .await?
                     .and_then(|mut paths| paths.pop()))

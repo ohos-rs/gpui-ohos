@@ -1,6 +1,3 @@
-> [!IMPORTANT]
-> Remove this line to confirm you've reviewed this PR before submitting.
-
 # gpui-ohos
 
 OpenHarmony platform backend for GPUI, with native windows, GPU rendering,
@@ -21,6 +18,42 @@ Pass the Ability's `OpenHarmonyApp` as `openharmony_app`.
 Configure the Ability and its ArkTS plugins as shown in the
 [example entry Ability](./example/ohos/entry/src/main/ets/entryability/EntryAbility.ets),
 including the clipboard metadata MIME type and notification response scheme.
+
+### Optional persistent file access
+
+File selections work with the provider's temporary grants by default. Persisting
+picker, incoming open-URI and accepted drop grants is application policy and must
+be explicitly enabled:
+
+```rust
+let platform = gpui_ohos::try_current_platform(
+    openharmony_app,
+    gpui_ohos::PlatformOptions {
+        persist_file_access: true,
+        ..Default::default()
+    },
+)?;
+```
+
+Declare `ohos.permission.FILE_ACCESS_PERSIST` only if using this option. The
+backend does not read history or call permission persistence APIs when disabled.
+Restoration and queued early selections run on a background executor only after
+the first successfully presented GPUI frame, never during GPU initialization.
+There is no startup barrier: applications must tolerate unavailable restored
+files during their initial UI and let users reselect a path if needed.
+
+History and the pre-frame queue each hold at most 256 distinct provider URIs;
+policy IPC uses batches of at most 64. History reads are limited to 2 MiB and each
+URI to 4096 bytes. Oversized or malformed history is reported and preserved,
+not silently truncated. A full history keeps existing grants and reports that
+additional selections cannot be retained; it never truncates the returned paths
+or revokes provider grants. Revoked grants are removed on restoration.
+
+Open pickers, incoming URIs and drops retain read access; save pickers explicitly
+request read/write access. Provider rejection, read-only fallback, activation and
+history-write failures are reported, while selected paths and successful grants
+are kept. Saved grants remain available for a later activation retry. Disabling
+persistence does not revoke grants already stored by the OS or delete history.
 
 ## Features
 
@@ -96,11 +129,18 @@ Initialize the pinned Ability runtime before building:
 git submodule update --init --recursive
 ```
 
-Rust dependencies and the example's ArkTS packages use the same submodule commit.
+Rust dependencies use the original audited Ability Git revision `05ce9195ea66876dc64a9481a76f03abb2ea20db`;
+the example's ArkTS submodule uses that same commit. The library no longer reads
+Rust sources from `example/`.
 It includes unpublished runtime interfaces; using registry beta.3 for only one
 side of that interface is unsupported. The IME binding dependency is pinned by
-Ability to an exact Git commit until a compatible release is available. When
-sharing a local integration branch, publish its dependency commits first.
+Ability to the original exact Git commit `842f4d4105b6c34a7c108d29c88d17cb496ed912`.
+These are reproducible source dependencies, **not merge-ready release pins**:
+[Ability #93](https://github.com/harmony-contrib/openharmony-ability/pull/93),
+[bindings #180](https://github.com/ohos-rs/ohos-native-bindings/pull/180), and
+[GPUI core #3](https://github.com/ohos-rs/zed/pull/3) remain merge blockers.
+No new draft revision is introduced. Replace these pins with compatible
+published releases after the upstream interfaces land.
 
 Applications can set `App::set_native_prompt_style` to provide semantic dialog
 colors from their current theme. Native prompts convert GPUI RGBA colors to the
@@ -123,6 +163,7 @@ Portable checks:
 ```sh
 cargo test --manifest-path tests/touch/Cargo.toml
 cargo test --manifest-path tests/touch/Cargo.toml --features native-vsync
+cargo test --manifest-path tests/file-access/Cargo.toml
 cargo check --target aarch64-unknown-linux-ohos
 ```
 
