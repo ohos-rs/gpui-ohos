@@ -1,5 +1,5 @@
 //! Native wheel ticks/device pixels retained during synchronous GPUI dispatch.
-use gpui::{Pixels, Point, ScrollDelta, WindowId, point, px};
+use gpui::{Pixels, Point, ScrollDelta, TouchPhase, WindowId, point, px};
 use std::{cell::Cell, marker::PhantomData, rc::Rc};
 
 const WHEEL_DEGREES: f64 = 15.;
@@ -40,11 +40,27 @@ pub(super) struct ScrollPacket {
 }
 
 impl ScrollPacket {
+    pub(super) fn axis(raw: Point<f64>, scale: f32, wheel: bool, scroll_step: i32) -> Option<Self> {
+        if wheel {
+            Self::wheel(raw, scroll_step)
+        } else {
+            Self::pixels(raw, scale)
+        }
+    }
+
+    pub(super) fn should_dispatch(&self, phase: TouchPhase) -> bool {
+        let nonzero = match self.delta {
+            ScrollDelta::Lines(delta) => delta.x != 0. || delta.y != 0.,
+            ScrollDelta::Pixels(delta) => delta.x != px(0.) || delta.y != px(0.),
+        };
+        nonzero || matches!(phase, TouchPhase::Started | TouchPhase::Ended)
+    }
+
     /// ArkUI mouse axis values include the system scroll-step coefficient.
     /// Generic GPUI widgets retain it; terminal clients can recover detents
     /// and apply their own explicit precision/discrete configuration.
     pub(super) fn wheel(degrees: Point<f64>, scroll_step: i32) -> Option<Self> {
-        let lines = degrees.map(|value| -value / WHEEL_DEGREES);
+        let lines = degrees.map(|value| value / WHEEL_DEGREES);
         let logical = lines.map(|value| value as f32);
         if !logical.x.is_finite() || !logical.y.is_finite() {
             return None;

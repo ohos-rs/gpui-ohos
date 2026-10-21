@@ -45,6 +45,12 @@
 
 ### Fixed
 
+- Restore the pre-pointer-scroll native wheel and touchpad signs. Discrete
+  wheels continue to use GPUI line units with the system scroll-step coefficient;
+  touchpads retain device-pixel scaling. Zero-delta axis updates are ignored
+  except for gesture start and end.
+- Scroll direction has not been verified on hardware. Mouse-wheel and touchpad
+  acceptance, including natural scrolling on and off, remains required.
 - Empty image-policy atlas metadata skips GPU sprite copies and per-sprite hash
   lookups. Uploaded tiles retain their policy until removal even after their
   registration's final owner is dropped.
