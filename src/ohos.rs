@@ -1,3 +1,4 @@
+#[cfg(feature = "audio")]
 mod audio;
 mod capture_pixels;
 mod clipboard;
@@ -93,6 +94,7 @@ pub use image_alpha::{PremultipliedImage, RasterImage};
 pub use pointer_position::NativePointerPosition;
 pub use scroll_input::NativeScrollDelta;
 
+#[cfg(feature = "audio")]
 pub use audio::{
     AudioBridgePlugin, NativeAudioError, NativeAudioPlayer, NativeAudioPlayerOptions,
     NativeAudioService,

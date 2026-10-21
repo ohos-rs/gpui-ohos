@@ -22,6 +22,8 @@ pub enum FrameInputDelivery {
 
 #[derive(Default)]
 pub(crate) struct FrameState {
+    #[cfg(feature = "audio")]
+    pub(crate) audio: crate::audio_support::AudioState,
     pub(crate) delivery_window: Cell<i64>,
     pub(crate) xcomponent: Cell<bool>,
     pub(crate) callback_active: Rc<Cell<bool>>,

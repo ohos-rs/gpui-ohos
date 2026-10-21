@@ -18,6 +18,7 @@ pub use ohos::{PremultipliedImage, RasterImage};
 
 pub use ohos::{NativePointerPosition, NativeScrollDelta};
 
+#[cfg(feature = "audio")]
 pub use ohos::{
     AudioBridgePlugin, NativeAudioError, NativeAudioPlayer, NativeAudioPlayerOptions,
     NativeAudioService,

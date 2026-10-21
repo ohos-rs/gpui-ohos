@@ -2,6 +2,17 @@
 #[cfg(test)]
 extern crate self as napi_ohos;
 extern crate self as openharmony_ability;
+#[cfg(all(test, feature = "audio"))]
+extern crate self as openharmony_ability_plugin_audio;
+#[cfg(all(test, feature = "audio"))]
+#[allow(dead_code)]
+#[path = "../../src/ohos/audio.rs"]
+mod audio;
+#[cfg(all(test, feature = "audio"))]
+#[path = "support/audio.rs"]
+mod audio_support;
+#[cfg(all(test, feature = "audio"))]
+pub use audio_support::{AudioBridgePlugin, AudioClient, AudioUpdateRequest};
 #[cfg(test)]
 #[path = "support/frame_delivery.rs"]
 mod frame_delivery_support;
@@ -23,7 +34,7 @@ mod frame_delivery;
 #[allow(dead_code)]
 #[path = "../../src/ohos/launch.rs"]
 mod launch;
-pub use gpui::{Pixels, PlatformDispatcher, Priority, RunnableVariant, Size};
+pub use gpui::{ForegroundExecutor, Pixels, PlatformDispatcher, Priority, RunnableVariant, Size};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

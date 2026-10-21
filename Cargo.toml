@@ -70,6 +70,7 @@ default = ["gles"]
 gles = ["wgpu/gles"]
 vulkan = ["wgpu/vulkan"]
 native-vsync = ["dep:ohos-vsync-binding"]
+audio = ["dep:openharmony-ability-plugin-audio"]
 
 [lib]
 name = "gpui_ohos"
@@ -96,7 +97,7 @@ ohos-fileuri-binding.workspace = true
 ohos-fileshare-binding.workspace = true
 ohos-vsync-binding = { workspace = true, optional = true }
 openharmony-ability.workspace = true
-openharmony-ability-plugin-audio.workspace = true
+openharmony-ability-plugin-audio = { workspace = true, optional = true }
 openharmony-ability-plugin-menu.workspace = true
 openharmony-ability-plugin-notification.workspace = true
 openharmony-ability-plugin-system-state.workspace = true
