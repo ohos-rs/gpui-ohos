@@ -4,6 +4,13 @@
 
 ### Breaking
 
+- `NativePointerPosition` and `NativeScrollDelta` now require the nondefault
+  `native-input` Cargo feature. Their modules and thread-local recording are
+  excluded from default builds. Ordinary GPUI input is unchanged by this gate.
+- Unknown or nonpositive wheel `scroll_step` no longer fabricates unscaled
+  detents: `NativeScrollDelta::get` returns `None`. Generic GPUI line deltas
+  remain available.
+
 - `PremultipliedImage::new`, `RasterImage::straight`, and
   `RasterImage::premultiplied` now return `Result<Self, ImageRegistrationError>`.
   Handle the result (for example, with `?`) instead of assuming registration

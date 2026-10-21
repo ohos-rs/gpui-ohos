@@ -71,6 +71,7 @@ gles = ["wgpu/gles"]
 vulkan = ["wgpu/vulkan"]
 native-vsync = ["dep:ohos-vsync-binding"]
 grid = ["dep:harfrust"]
+native-input = []
 api-19 = ["openharmony-ability/api-19"]
 api-26 = ["api-19", "openharmony-ability/api-26"]
 
