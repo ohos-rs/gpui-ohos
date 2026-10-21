@@ -8,9 +8,12 @@ on:
 jobs:
   host-tests:
     runs-on: macos-latest
+    strategy:
+      matrix:
+        features: ["", "native-input", "native-vsync", "native-vsync,native-input"]
     env:
       CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --manifest-path tests/touch/Cargo.toml --locked --features native-vsync
+      - run: cargo test --manifest-path tests/touch/Cargo.toml --locked --features "${{ matrix.features }}"

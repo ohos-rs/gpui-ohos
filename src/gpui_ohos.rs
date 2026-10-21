@@ -16,4 +16,5 @@ pub use ohos::{
 
 pub use ohos::{PremultipliedImage, RasterImage};
 
+#[cfg(feature = "native-input")]
 pub use ohos::{NativePointerPosition, NativeScrollDelta};

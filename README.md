@@ -29,6 +29,7 @@ including the clipboard metadata MIME type and notification response scheme.
 | `gles` | OpenGL ES rendering, enabled by default. |
 | `vulkan` | Vulkan rendering. |
 | `native-vsync` | Use NativeVSync frame callbacks instead of XComponent callbacks. |
+| `native-input` | Opt in to native pointer coordinates and event-scoped wheel metadata; disabled by default. |
 
 Touch scrolling uses native gesture recognition and supports momentum scrolling.
 Frames are requested on demand through XComponent callbacks by default.
@@ -132,6 +133,13 @@ Discrete wheels use GPUI `Lines` with the system scroll-step coefficient;
 touchpads use scaled device pixels. Zero-delta axis updates are ignored except
 for gesture start and end. Fractional pointer coordinates and simultaneous
 mouse-button tracking are preserved.
+
+`NativePointerPosition` and `NativeScrollDelta` require the nondefault
+`native-input` Cargo feature. Without it, their modules, thread-local storage and
+recording calls are not compiled; ordinary GPUI input remains available.
+Unscaled wheel detents are available only when the system reports a positive
+`scroll_step`. For an unknown or nonpositive step, `NativeScrollDelta::get`
+returns `None`, while ordinary widgets still receive the original line delta.
 
 Hardware wheel/touchpad direction, including natural scrolling on and off, has
 not been verified. Host regressions are not hardware acceptance.

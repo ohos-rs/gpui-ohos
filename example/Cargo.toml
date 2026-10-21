@@ -28,6 +28,7 @@ default = ["gles"]
 gles = ["gpui-ohos/gles"]
 vulkan = ["gpui-ohos/vulkan"]
 native-vsync = ["gpui-ohos/native-vsync"]
+native-input = ["gpui-ohos/native-input"]
 
 [build-dependencies]
 napi-build-ohos = "=1.2.0"

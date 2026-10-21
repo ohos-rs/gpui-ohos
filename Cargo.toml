@@ -69,6 +69,7 @@ default = ["gles"]
 gles = ["wgpu/gles"]
 vulkan = ["wgpu/vulkan"]
 native-vsync = ["dep:ohos-vsync-binding"]
+native-input = []
 
 [lib]
 name = "gpui_ohos"

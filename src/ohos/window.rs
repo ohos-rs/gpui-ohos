@@ -44,7 +44,7 @@ use super::touch_scroll::{NativePanInput, TouchScroll};
 use super::wgpu_atlas::WgpuAtlas;
 use super::wgpu_context::WgpuContext;
 use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
-use super::{mouse_buttons::MouseButtons, scroll_input::ScrollPacket};
+use super::{mouse_buttons::MouseButtons, scroll_packet::ScrollPacket};
 use crate::{
     A11yCallbacks, AnyWindowHandle, Bounds, Capslock, CursorStyle, DevicePixels, Edges,
     ForegroundExecutor, FrameRequestSource, GestureTuning, GpuSpecs, KeyDownEvent, Keystroke,
@@ -901,6 +901,7 @@ impl OhosWindow {
 
     fn pointer_position_from_device_pixels(&self, x: f32, y: f32) -> Point<Pixels> {
         let logical = self.point_from_device_pixels(x, y);
+        #[cfg(feature = "native-input")]
         super::pointer_position::NativePointerPosition::record(
             self.handle.window_id(),
             logical,
@@ -3147,6 +3148,7 @@ impl OhosWindow {
                     UIInputAction::Move => TouchPhase::Moved,
                 };
                 if packet.should_dispatch(touch_phase) {
+                    #[cfg(feature = "native-input")]
                     let _native = packet.bind(self.handle.window_id(), scale);
                     self.dispatch_scroll(position, packet.delta, touch_phase);
                 }
