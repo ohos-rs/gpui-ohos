@@ -4,6 +4,12 @@
 
 ### Breaking
 
+- `PremultipliedImage::new`, `RasterImage::straight`, and
+  `RasterImage::premultiplied` now return `Result<Self, ImageRegistrationError>`.
+  Handle the result (for example, with `?`) instead of assuming registration
+  succeeds. Conflicts identify the image and both `ImagePolicy` values; the
+  existing registration remains unchanged.
+
 - Fixed-cell terminal shaping now requires the nondefault `grid` Cargo feature.
   This includes `FontCatalog::layout_grid`, `GridLayoutRequest`,
   `GridLayoutError`, and `GridTextCell`. Enable `gpui-ohos/grid` in terminal
@@ -39,6 +45,11 @@
 
 ### Fixed
 
+- Empty image-policy atlas metadata skips GPU sprite copies and per-sprite hash
+  lookups. Uploaded tiles retain their policy until removal even after their
+  registration's final owner is dropped.
+- Matching registrations and clones share lifetime-bound cleanup. Registry locks
+  are released before upgraded owners can be dropped.
 - Retain clipboard serialization until native completion even if a caller drops
   its write/read task. Invalidate cache after writes instead of attributing a
   potentially interleaved external write's counter to our old item. Preserve
@@ -59,3 +70,7 @@
   `0e41a3141d1053e9a5172738538d725b050e2d36` (with `ohos-native-bindings` unified
   at `43aec6c125503a47f7e875c793aaf2462e91ad19`). Ability #93-#98 and GPUI core #3
   remain unmerged release blockers.
+
+The private GPU padding-field encoding remains a bounded workaround pending an
+upstream `RenderImage` alpha/sampling API; alpha math and default linear filtering
+are unchanged.
