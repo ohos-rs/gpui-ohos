@@ -90,7 +90,7 @@ impl PlatformServices {
     }
 }
 
-pub use image_alpha::{PremultipliedImage, RasterImage};
+pub use image_alpha::{ImagePolicy, ImageRegistrationError, PremultipliedImage, RasterImage};
 
 #[cfg(feature = "native-input")]
 pub use pointer_position::NativePointerPosition;

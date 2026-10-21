@@ -1518,9 +1518,9 @@ impl WgpuRenderer {
         instance_offset: &mut u64,
     ) -> Option<SceneInstanceBindings> {
         let mut polychrome = self.polychrome_sprites.borrow_mut();
-        polychrome.clear();
-        polychrome.extend_from_slice(&scene.polychrome_sprites);
-        self.atlas.encode_image_alpha(&mut polychrome);
+        let polychrome = self
+            .atlas
+            .encode_image_alpha(&scene.polychrome_sprites, &mut polychrome);
         // One staging allocation and one queued copy for all instance kinds.
         let data = unsafe {
             [
@@ -1529,7 +1529,7 @@ impl WgpuRenderer {
                 Self::instance_bytes(&scene.underlines),
                 Self::instance_bytes(&scene.monochrome_sprites),
                 Self::instance_bytes(&scene.subpixel_sprites),
-                Self::instance_bytes(&polychrome),
+                Self::instance_bytes(polychrome),
             ]
         };
         let start = (*instance_offset).next_multiple_of(self.instance_buffer_alignment);
