@@ -44,7 +44,7 @@ use super::touch_scroll::{NativePanInput, TouchScroll};
 use super::wgpu_atlas::WgpuAtlas;
 use super::wgpu_context::WgpuContext;
 use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
-use super::{mouse_buttons::MouseButtons, scroll_input::ScrollPacket};
+use super::{mouse_buttons::MouseButtons, scroll_packet::ScrollPacket};
 use crate::{
     A11yCallbacks, AnyWindowHandle, Bounds, Capslock, CursorStyle, DevicePixels, Edges,
     ForegroundExecutor, FrameRequestSource, GestureTuning, GpuSpecs, KeyDownEvent, Keystroke,
@@ -901,6 +901,7 @@ impl OhosWindow {
 
     fn pointer_position_from_device_pixels(&self, x: f32, y: f32) -> Point<Pixels> {
         let logical = self.point_from_device_pixels(x, y);
+        #[cfg(feature = "native-input")]
         super::pointer_position::NativePointerPosition::record(
             self.handle.window_id(),
             logical,
@@ -3137,21 +3138,20 @@ impl OhosWindow {
                 let scale = *self.scale.borrow();
                 let wheel = axis_event.pointer.source_type == UIInputSourceType::Mouse
                     && axis_event.pointer.tool_type != UIInputToolType::Touchpad;
-                let packet = if wheel {
-                    ScrollPacket::wheel(raw, axis_event.scroll_step)
-                } else {
-                    ScrollPacket::pixels(-raw, scale)
-                };
+                let packet = ScrollPacket::axis(raw, scale, wheel, axis_event.scroll_step);
                 let Some(packet) = packet else {
                     return;
                 };
-                let _native = packet.bind(self.handle.window_id(), scale);
                 let touch_phase = match axis_event.pointer.action {
                     UIInputAction::Down => TouchPhase::Started,
                     UIInputAction::Up | UIInputAction::Cancel => TouchPhase::Ended,
                     UIInputAction::Move => TouchPhase::Moved,
                 };
-                self.dispatch_scroll(position, packet.delta, touch_phase);
+                if packet.should_dispatch(touch_phase) {
+                    #[cfg(feature = "native-input")]
+                    let _native = packet.bind(self.handle.window_id(), scale);
+                    self.dispatch_scroll(position, packet.delta, touch_phase);
+                }
             }
             InputEvent::ArkUi(ArkUiInputEvent::Gesture(
                 openharmony_ability::GestureEvent::Pan(pan),

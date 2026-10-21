@@ -1,0 +1,20 @@
+name: Image policy regressions
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  image-policies:
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run production image ownership and sprite encoding tests
+        run: cargo test --manifest-path tests/text/Cargo.toml --release --locked image_alpha

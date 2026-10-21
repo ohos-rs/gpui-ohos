@@ -30,6 +30,7 @@ including the clipboard metadata MIME type and notification response scheme.
 | `vulkan` | Vulkan rendering. |
 | `native-vsync` | Use NativeVSync frame callbacks instead of XComponent callbacks. |
 | `audio` | Opt-in owned-file audio playback and its Ability plugin dependency. Disabled by default. |
+| `native-input` | Opt in to native pointer coordinates and event-scoped wheel metadata; disabled by default. |
 
 Touch scrolling uses native gesture recognition and supports momentum scrolling.
 Frames are requested on demand through XComponent callbacks by default.
@@ -126,6 +127,24 @@ routing, task-center close confirmation and enforced provider permission behavio
 still need further work; this does not establish complete desktop parity.
 
 
+## Pointer and scroll input
+
+Wheel and touchpad deltas preserve the pre-pointer-scroll native sign.
+Discrete wheels use GPUI `Lines` with the system scroll-step coefficient;
+touchpads use scaled device pixels. Zero-delta axis updates are ignored except
+for gesture start and end. Fractional pointer coordinates and simultaneous
+mouse-button tracking are preserved.
+
+`NativePointerPosition` and `NativeScrollDelta` require the nondefault
+`native-input` Cargo feature. Without it, their modules, thread-local storage and
+recording calls are not compiled; ordinary GPUI input remains available.
+Unscaled wheel detents are available only when the system reports a positive
+`scroll_step`. For an unknown or nonpositive step, `NativeScrollDelta::get`
+returns `None`, while ordinary widgets still receive the original line delta.
+
+Hardware wheel/touchpad direction, including natural scrolling on and off, has
+not been verified. Host regressions are not hardware acceptance.
+
 ## Shared font services
 
 Embedders that need exact face bytes, synthetic styles or fixed-cell text can use
@@ -138,7 +157,6 @@ fonts. Explicit variation overrides retain the instance's other axes.
 
 Host font regressions: `cargo test --manifest-path tests/text/Cargo.toml`.
 The small original font fixtures are reproducible with the generators in that directory.
-
 
 ## Optional file audio
 
@@ -171,3 +189,28 @@ cargo test --manifest-path tests/touch/Cargo.toml --no-default-features --featur
 ```
 
 These checks do not establish native playback or descriptor-duplication acceptance.
+
+## Explicit image alpha and sampling
+
+Ordinary GPUI images keep straight alpha and linear filtering. Register externally
+rasterized images before their first atlas upload:
+
+```rust
+let ui_image = gpui_ohos::PremultipliedImage::new(premultiplied_pixels)?;
+let glyph_image = gpui_ohos::RasterImage::straight(straight_pixels)?;
+let color_glyph = gpui_ohos::RasterImage::premultiplied(color_pixels)?;
+```
+
+Each constructor returns `Result<_, ImageRegistrationError>`. A conflicting live
+registration returns the image ID and existing/requested `ImagePolicy` without
+panicking or changing the existing owner. Matching registrations share ownership;
+keep an owner alive while caching or painting its image. The last owner removes
+the live registration, but uploaded tiles retain their original policy until
+evicted. To change a policy, release every owner and evict the old atlas tiles
+before registering and uploading the image again.
+
+Empty atlas metadata borrows scene sprites directly, without copying them or
+performing per-sprite hash lookups. The backend still temporarily carries nondefault
+flags in GPU copies of `PolychromeSprite.pad`; this bounded workaround needs an
+upstream `RenderImage` alpha/sampling API before it can be removed. It does not
+change GPUI's scene ABI or the ordinary linear UI sampling path.

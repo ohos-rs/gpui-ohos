@@ -17,12 +17,15 @@ mod mouse_buttons;
 mod native_frames;
 mod path_targets;
 mod platform;
+#[cfg(feature = "native-input")]
 mod pointer_position;
 mod presentation;
 mod quad_pipeline;
 mod render_cache;
 mod screen_capture;
+#[cfg(feature = "native-input")]
 mod scroll_input;
+mod scroll_packet;
 mod task_queue;
 mod text_system;
 mod touch_scroll;
@@ -89,9 +92,11 @@ impl PlatformServices {
     }
 }
 
-pub use image_alpha::{PremultipliedImage, RasterImage};
+pub use image_alpha::{ImagePolicy, ImageRegistrationError, PremultipliedImage, RasterImage};
 
+#[cfg(feature = "native-input")]
 pub use pointer_position::NativePointerPosition;
+#[cfg(feature = "native-input")]
 pub use scroll_input::NativeScrollDelta;
 
 #[cfg(feature = "audio")]

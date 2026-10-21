@@ -1,8 +1,6 @@
 //! Native wheel ticks/device pixels retained during synchronous GPUI dispatch.
-use gpui::{Pixels, Point, ScrollDelta, WindowId, point, px};
+use gpui::{Pixels, Point, ScrollDelta, WindowId, point};
 use std::{cell::Cell, marker::PhantomData, rc::Rc};
-
-const WHEEL_DEGREES: f64 = 15.;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NativeScrollDelta {
@@ -15,7 +13,7 @@ struct ScrollContext {
     window: WindowId,
     logical: ScrollDelta,
     scale: f32,
-    native: NativeScrollDelta,
+    native: Option<NativeScrollDelta>,
 }
 
 thread_local! {
@@ -34,53 +32,22 @@ impl Drop for NativeScrollScope {
     }
 }
 
-pub(super) struct ScrollPacket {
-    pub(super) delta: ScrollDelta,
-    native: NativeScrollDelta,
-}
-
-impl ScrollPacket {
-    /// ArkUI mouse axis values include the system scroll-step coefficient.
-    /// Generic GPUI widgets retain it; terminal clients can recover detents
-    /// and apply their own explicit precision/discrete configuration.
-    pub(super) fn wheel(degrees: Point<f64>, scroll_step: i32) -> Option<Self> {
-        let lines = degrees.map(|value| -value / WHEEL_DEGREES);
-        let logical = lines.map(|value| value as f32);
-        if !logical.x.is_finite() || !logical.y.is_finite() {
-            return None;
-        }
-        Some(Self {
-            delta: ScrollDelta::Lines(logical),
-            native: NativeScrollDelta::WheelTicks(
-                lines.map(|value| value / f64::from(scroll_step.max(1))),
-            ),
-        })
-    }
-
-    pub(super) fn pixels(device: Point<f64>, scale: f32) -> Option<Self> {
-        if !scale.is_finite() || scale <= 0. {
-            return None;
-        }
-        let logical = device.map(|value| px(value as f32 / scale));
-        if !logical.x.as_f32().is_finite() || !logical.y.as_f32().is_finite() {
-            return None;
-        }
-        Some(Self {
-            delta: ScrollDelta::Pixels(logical),
-            native: NativeScrollDelta::DevicePixels(device),
-        })
-    }
-
-    pub(super) fn bind(&self, window: WindowId, scale: f32) -> NativeScrollScope {
+impl NativeScrollScope {
+    pub(super) fn bind(
+        window: WindowId,
+        logical: ScrollDelta,
+        scale: f32,
+        native: Option<NativeScrollDelta>,
+    ) -> Self {
         let previous = CURRENT.with(|current| {
             current.replace(Some(ScrollContext {
                 window,
-                logical: self.delta,
+                logical,
                 scale,
-                native: self.native,
+                native,
             }))
         });
-        NativeScrollScope {
+        Self {
             previous,
             _ui_thread: PhantomData,
         }
@@ -122,7 +89,7 @@ impl NativeScrollDelta {
                     },
                 )
             };
-            Some(match context.native {
+            Some(match context.native? {
                 Self::WheelTicks(value) => Self::WheelTicks(project(value)),
                 Self::DevicePixels(value) => Self::DevicePixels(project(value)),
             })
@@ -132,7 +99,9 @@ impl NativeScrollDelta {
 
 #[cfg(test)]
 mod tests {
+    use super::super::scroll_packet::ScrollPacket;
     use super::*;
+    use gpui::px;
 
     #[test]
     fn native_pixels_keep_double_precision_and_are_scoped_to_the_matching_dispatch() {
@@ -174,10 +143,10 @@ mod tests {
         let window = WindowId::from(1);
         let packet = ScrollPacket::wheel(point(45., -90.), 3).unwrap();
         let _outer = packet.bind(window, 1.9);
-        assert!(matches!(packet.delta, ScrollDelta::Lines(delta) if delta == point(-3., 6.)));
+        assert!(matches!(packet.delta, ScrollDelta::Lines(delta) if delta == point(3., -6.)));
         assert_eq!(
             NativeScrollDelta::get(window, packet.delta, 1.9),
-            Some(NativeScrollDelta::WheelTicks(point(-1., 2.)))
+            Some(NativeScrollDelta::WheelTicks(point(1., -2.)))
         );
         {
             let nested = ScrollPacket::pixels(point(0., 40.), 1.9).unwrap();
@@ -186,10 +155,28 @@ mod tests {
         }
         assert_eq!(
             NativeScrollDelta::get(window, packet.delta, 1.9),
-            Some(NativeScrollDelta::WheelTicks(point(-1., 2.)))
+            Some(NativeScrollDelta::WheelTicks(point(1., -2.)))
         );
         assert!(ScrollPacket::pixels(point(1., 1.), 0.).is_none());
         assert!(ScrollPacket::wheel(point(f64::NAN, 0.), 1).is_none());
         assert!(ScrollPacket::pixels(point(f64::MAX, 0.), 1.).is_none());
+    }
+
+    #[test]
+    fn unknown_or_nonpositive_step_has_no_unscaled_wheel_detents() {
+        let window = WindowId::from(1);
+        let outer = ScrollPacket::wheel(point(45., -90.), 3).unwrap();
+        let _outer = outer.bind(window, 1.9);
+        for step in [i32::MIN, -1, 0] {
+            let packet = ScrollPacket::wheel(point(45., -90.), step).unwrap();
+            {
+                let _scope = packet.bind(window, 1.9);
+                assert!(NativeScrollDelta::get(window, packet.delta, 1.9).is_none());
+            }
+            assert_eq!(
+                NativeScrollDelta::get(window, outer.delta, 1.9),
+                Some(NativeScrollDelta::WheelTicks(point(1., -2.)))
+            );
+        }
     }
 }

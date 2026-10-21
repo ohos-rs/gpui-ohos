@@ -9,6 +9,7 @@ publish = false
 [features]
 native-vsync = []
 audio = ["dep:futures"]
+native-input = []
 
 [dependencies]
 gpui = { git = "https://github.com/ohos-rs/zed", rev = "422c92ace17512aa5ea66f73dc14044008d3e87d", default-features = false }

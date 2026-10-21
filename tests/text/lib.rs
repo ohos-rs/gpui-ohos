@@ -43,4 +43,4 @@ mod locale_tests {
 #[cfg_attr(not(test), allow(dead_code))]
 #[path = "../../src/ohos/image_alpha.rs"]
 mod image_alpha;
-pub use image_alpha::{PremultipliedImage, RasterImage};
+pub use image_alpha::{ImagePolicy, ImageRegistrationError, PremultipliedImage, RasterImage};
