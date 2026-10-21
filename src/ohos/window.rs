@@ -3137,21 +3137,19 @@ impl OhosWindow {
                 let scale = *self.scale.borrow();
                 let wheel = axis_event.pointer.source_type == UIInputSourceType::Mouse
                     && axis_event.pointer.tool_type != UIInputToolType::Touchpad;
-                let packet = if wheel {
-                    ScrollPacket::wheel(raw, axis_event.scroll_step)
-                } else {
-                    ScrollPacket::pixels(-raw, scale)
-                };
+                let packet = ScrollPacket::axis(raw, scale, wheel, axis_event.scroll_step);
                 let Some(packet) = packet else {
                     return;
                 };
-                let _native = packet.bind(self.handle.window_id(), scale);
                 let touch_phase = match axis_event.pointer.action {
                     UIInputAction::Down => TouchPhase::Started,
                     UIInputAction::Up | UIInputAction::Cancel => TouchPhase::Ended,
                     UIInputAction::Move => TouchPhase::Moved,
                 };
-                self.dispatch_scroll(position, packet.delta, touch_phase);
+                if packet.should_dispatch(touch_phase) {
+                    let _native = packet.bind(self.handle.window_id(), scale);
+                    self.dispatch_scroll(position, packet.delta, touch_phase);
+                }
             }
             InputEvent::ArkUi(ArkUiInputEvent::Gesture(
                 openharmony_ability::GestureEvent::Pan(pan),

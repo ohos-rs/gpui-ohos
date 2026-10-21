@@ -125,6 +125,17 @@ routing, task-center close confirmation and enforced provider permission behavio
 still need further work; this does not establish complete desktop parity.
 
 
+## Pointer and scroll input
+
+Wheel and touchpad deltas preserve the pre-pointer-scroll native sign.
+Discrete wheels use GPUI `Lines` with the system scroll-step coefficient;
+touchpads use scaled device pixels. Zero-delta axis updates are ignored except
+for gesture start and end. Fractional pointer coordinates and simultaneous
+mouse-button tracking are preserved.
+
+Hardware wheel/touchpad direction, including natural scrolling on and off, has
+not been verified. Host regressions are not hardware acceptance.
+
 ## Shared font services
 
 Embedders that need exact face bytes, synthetic styles or fixed-cell text can use

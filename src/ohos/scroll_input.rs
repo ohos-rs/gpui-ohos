@@ -1,5 +1,5 @@
 //! Native wheel ticks/device pixels retained during synchronous GPUI dispatch.
-use gpui::{Pixels, Point, ScrollDelta, WindowId, point, px};
+use gpui::{Pixels, Point, ScrollDelta, TouchPhase, WindowId, point, px};
 use std::{cell::Cell, marker::PhantomData, rc::Rc};
 
 const WHEEL_DEGREES: f64 = 15.;
@@ -40,11 +40,27 @@ pub(super) struct ScrollPacket {
 }
 
 impl ScrollPacket {
+    pub(super) fn axis(raw: Point<f64>, scale: f32, wheel: bool, scroll_step: i32) -> Option<Self> {
+        if wheel {
+            Self::wheel(raw, scroll_step)
+        } else {
+            Self::pixels(raw, scale)
+        }
+    }
+
+    pub(super) fn should_dispatch(&self, phase: TouchPhase) -> bool {
+        let nonzero = match self.delta {
+            ScrollDelta::Lines(delta) => delta.x != 0. || delta.y != 0.,
+            ScrollDelta::Pixels(delta) => delta.x != px(0.) || delta.y != px(0.),
+        };
+        nonzero || matches!(phase, TouchPhase::Started | TouchPhase::Ended)
+    }
+
     /// ArkUI mouse axis values include the system scroll-step coefficient.
     /// Generic GPUI widgets retain it; terminal clients can recover detents
     /// and apply their own explicit precision/discrete configuration.
     pub(super) fn wheel(degrees: Point<f64>, scroll_step: i32) -> Option<Self> {
-        let lines = degrees.map(|value| -value / WHEEL_DEGREES);
+        let lines = degrees.map(|value| value / WHEEL_DEGREES);
         let logical = lines.map(|value| value as f32);
         if !logical.x.is_finite() || !logical.y.is_finite() {
             return None;
@@ -174,10 +190,10 @@ mod tests {
         let window = WindowId::from(1);
         let packet = ScrollPacket::wheel(point(45., -90.), 3).unwrap();
         let _outer = packet.bind(window, 1.9);
-        assert!(matches!(packet.delta, ScrollDelta::Lines(delta) if delta == point(-3., 6.)));
+        assert!(matches!(packet.delta, ScrollDelta::Lines(delta) if delta == point(3., -6.)));
         assert_eq!(
             NativeScrollDelta::get(window, packet.delta, 1.9),
-            Some(NativeScrollDelta::WheelTicks(point(-1., 2.)))
+            Some(NativeScrollDelta::WheelTicks(point(1., -2.)))
         );
         {
             let nested = ScrollPacket::pixels(point(0., 40.), 1.9).unwrap();
@@ -186,10 +202,39 @@ mod tests {
         }
         assert_eq!(
             NativeScrollDelta::get(window, packet.delta, 1.9),
-            Some(NativeScrollDelta::WheelTicks(point(-1., 2.)))
+            Some(NativeScrollDelta::WheelTicks(point(1., -2.)))
         );
         assert!(ScrollPacket::pixels(point(1., 1.), 0.).is_none());
         assert!(ScrollPacket::wheel(point(f64::NAN, 0.), 1).is_none());
         assert!(ScrollPacket::pixels(point(f64::MAX, 0.), 1.).is_none());
+    }
+
+    #[test]
+    fn axis_conversion_preserves_native_signs_for_wheels_and_touchpads() {
+        for raw in [point(45., -90.), point(-45., 90.)] {
+            let wheel = ScrollPacket::axis(raw, 1.9, true, 3).unwrap();
+            assert!(matches!(wheel.delta, ScrollDelta::Lines(delta)
+                    if delta == raw.map(|value| (value / WHEEL_DEGREES) as f32)));
+            let touchpad = ScrollPacket::axis(raw, 1.9, false, 0).unwrap();
+            assert!(matches!(touchpad.delta, ScrollDelta::Pixels(delta)
+                    if delta == raw.map(|value| px(value as f32 / 1.9))));
+        }
+    }
+
+    #[test]
+    fn zero_axis_delta_only_dispatches_started_and_ended() {
+        for wheel in [false, true] {
+            let packet = ScrollPacket::axis(point(0., -0.), 1.9, wheel, 3).unwrap();
+            for phase in [TouchPhase::Started, TouchPhase::Ended] {
+                assert!(packet.should_dispatch(phase));
+            }
+            for phase in [TouchPhase::Moved, TouchPhase::Cancelled] {
+                assert!(!packet.should_dispatch(phase));
+            }
+            for raw in [point(0., 0.5), point(-0.5, 0.)] {
+                let packet = ScrollPacket::axis(raw, 1.9, wheel, 3).unwrap();
+                assert!(packet.should_dispatch(TouchPhase::Moved));
+            }
+        }
     }
 }
