@@ -19,6 +19,7 @@ pub use ohos::{ImagePolicy, ImageRegistrationError, PremultipliedImage, RasterIm
 #[cfg(feature = "native-input")]
 pub use ohos::{NativePointerPosition, NativeScrollDelta};
 
+#[cfg(feature = "audio")]
 pub use ohos::{
     AudioBridgePlugin, NativeAudioError, NativeAudioPlayer, NativeAudioPlayerOptions,
     NativeAudioService,
