@@ -84,26 +84,33 @@ impl Fallback for OhosFontFallback {
 
 use unicode_segmentation::UnicodeSegmentation;
 
+#[cfg(feature = "grid")]
 #[path = "text_system/grid.rs"]
 mod grid;
 #[path = "text_system/named_instance.rs"]
 mod named_instance;
+#[cfg(feature = "grid")]
 pub use grid::{GridLayoutError, GridLayoutRequest, GridTextCell};
 
 pub(crate) struct OhosTextSystem(RwLock<OhosTextSystemState>);
 
-/// A stable handle to the same font database used by GPUI shaping and painting.
+/// An experimental handle to the font database used by GPUI shaping and painting.
 /// Resolved descriptors identify exact faces and can be used in ordinary TextRuns.
+///
+/// This API and its associated face, coordinate and synthesis types are unstable
+/// and may change between releases. Font identities remain immutable at runtime.
 #[derive(Clone)]
 pub struct FontCatalog(Arc<OhosTextSystem>);
 
-/// An effective design coordinate read from a font engine, in signed 16.16.
+/// An experimental design coordinate read from a font engine, in signed 16.16.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct FontDesignCoordinate {
     pub tag: [u8; 4],
     pub value: i32,
 }
 
+/// Experimental face data; see [`FontCatalog`] for API stability.
+///
 /// Keeps the exact registered font bytes alive while an embedding font engine
 /// reads them. The design weight matches this face's shaping/raster coordinate.
 pub struct FontFaceData {
@@ -138,6 +145,7 @@ impl FontFaceData {
     }
 }
 
+/// Experimental synthetic style; see [`FontCatalog`] for API stability.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct SyntheticFontStyle {
     pub bold: bool,
@@ -165,6 +173,7 @@ struct OhosTextSystemState {
     synthetic_scaler: swash::scale::ScaleContext,
     synthetic_images:
         HashMap<(CacheKey, SyntheticFontStyle, FontId), Option<cosmic_text::SwashImage>>,
+    #[cfg(feature = "grid")]
     grid_shaper: grid::GridShaper,
 }
 
@@ -177,14 +186,17 @@ struct LoadedFont {
     coordinates: SmallVec<[i16; 4]>,
     synthetic: SyntheticFontStyle,
     design_coordinates: Arc<[FontDesignCoordinate]>,
+    #[cfg(feature = "grid")]
     variable_shaper: Option<VariableShaper>,
 }
 
+#[cfg(feature = "grid")]
 struct VariableShaper {
     index: u32,
     data: harfrust::ShaperData,
     instance: harfrust::ShaperInstance,
 }
+#[cfg(feature = "grid")]
 impl VariableShaper {
     fn new(
         font: &CosmicTextFont,
@@ -233,6 +245,7 @@ impl LoadedFont {
             coordinates,
             synthetic: SyntheticFontStyle::default(),
             design_coordinates: Arc::from([]),
+            #[cfg(feature = "grid")]
             variable_shaper: None,
         }
     }
@@ -269,6 +282,7 @@ impl OhosTextSystemState {
             registered_faces: HashMap::default(),
             synthetic_scaler: swash::scale::ScaleContext::new(),
             synthetic_images: HashMap::default(),
+            #[cfg(feature = "grid")]
             grid_shaper: grid::GridShaper::default(),
         }
     }
@@ -437,7 +451,7 @@ impl FontCatalog {
         state.register_face(key)
     }
 
-    /// Register an immutable fixed-grid face with the engine's effective axes.
+    /// Register an immutable face with the engine's effective axes.
     /// The resulting FontId fixes axes, features and synthetic style together.
     pub fn with_design_coordinates(
         &self,
@@ -587,7 +601,6 @@ impl OhosTextSystemState {
         );
         loaded.synthetic = key.synthetic;
         if !key.design_coordinates.is_empty() {
-            let index = self.font_system.db().face(key.id)?.index;
             loaded.coordinates = loaded
                 .font
                 .as_swash()
@@ -598,11 +611,15 @@ impl OhosTextSystemState {
                         .map(|v| (u32::from_be_bytes(v.tag), v.value as f32 / 65536.)),
                 )
                 .collect();
-            loaded.variable_shaper = Some(VariableShaper::new(
-                &loaded.font,
-                index,
-                &key.design_coordinates,
-            )?);
+            #[cfg(feature = "grid")]
+            {
+                let index = self.font_system.db().face(key.id)?.index;
+                loaded.variable_shaper = Some(VariableShaper::new(
+                    &loaded.font,
+                    index,
+                    &key.design_coordinates,
+                )?);
+            }
             loaded.design_coordinates = key.design_coordinates.clone();
         }
         let id = FontId(self.loaded_fonts.len());

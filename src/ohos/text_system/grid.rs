@@ -1,4 +1,5 @@
-//! Fixed-cell shaping. GPUI's ordinary UI layout keeps its own bidi policy.
+//! Experimental fixed-cell shaping, enabled only by the nondefault `grid` feature.
+//! GPUI's ordinary UI layout keeps its own bidi policy.
 use super::{FontCatalog, LoadedFont, font_covers};
 use gpui::{Font, FontId, GlyphId, LineLayout, Pixels, ShapedGlyph, ShapedRun, point};
 use std::collections::VecDeque;

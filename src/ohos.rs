@@ -52,11 +52,11 @@ pub fn current_platform(app: OpenHarmonyApp, _headless: bool) -> std::rc::Rc<dyn
     )
 }
 
-pub use text_system::{
-    FontCatalog, FontDesignCoordinate, FontFaceData, GridLayoutError, GridLayoutRequest,
-    GridTextCell, SyntheticFontStyle,
-};
+pub use text_system::{FontCatalog, FontDesignCoordinate, FontFaceData, SyntheticFontStyle};
+#[cfg(feature = "grid")]
+pub use text_system::{GridLayoutError, GridLayoutRequest, GridTextCell};
 
+/// Experimental font-catalog API; signatures may change between releases.
 /// Platform and font services share face bytes, glyph IDs and immutable descriptors.
 pub struct PlatformServices {
     pub platform: std::rc::Rc<dyn gpui::Platform>,
