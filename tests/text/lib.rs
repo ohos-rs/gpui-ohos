@@ -1,3 +1,21 @@
+//! Host harness for the actual OHOS text backend, without the native runtime.
+#![cfg_attr(
+    not(feature = "grid"),
+    doc = r#"
+The default build does not export terminal grid APIs:
+```compile_fail
+use ohos_text_tests::{GridLayoutRequest, GridLayoutError, GridTextCell};
+```
+"#
+)]
+
+#[cfg(test)]
+macro_rules! font_fixture {
+    ($name:literal) => {
+        include_bytes!(concat!(env!("OUT_DIR"), "/fonts/", $name))
+    };
+}
+
 /// Isolated font database for terminal-to-platform integration tests.
 pub fn fonts(inputs: Vec<Cow<'static, [u8]>>) -> (Arc<dyn PlatformTextSystem>, FontCatalog) {
     let system = Arc::new(OhosTextSystem(RwLock::new(OhosTextSystemState::new(
@@ -11,6 +29,13 @@ pub fn fonts(inputs: Vec<Cow<'static, [u8]>>) -> (Arc<dyn PlatformTextSystem>, F
 
 // Exercise the actual platform shaper on a host without linking OHOS APIs.
 include!("../../src/ohos/text_system.rs");
+
+#[cfg(all(test, feature = "grid"))]
+mod grid_tests;
+#[cfg(test)]
+mod named_instances_tests;
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 mod locale_tests {

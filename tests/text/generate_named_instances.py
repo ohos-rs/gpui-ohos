@@ -1,5 +1,6 @@
 """Generate original named-instance fixtures with fonttools 4.60.1."""
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
 
 from fontTools.designspaceLib import AxisDescriptor, DesignSpaceDocument, InstanceDescriptor, SourceDescriptor
@@ -53,8 +54,7 @@ class NamedInstanceFixtures:
             variable["head"].created = variable["head"].modified = 2082844800
             variable.save(destination)
 
-    def run(self):
-        directory = Path(__file__).resolve().parent / "fonts"
+    def run(self, directory):
         self.build(directory / "multi-axis.ttf", True)
         self.build(directory / "width-axis.ttf", False)
         default = TTFont(directory / "multi-axis.ttf", recalcTimestamp=False)
@@ -63,4 +63,4 @@ class NamedInstanceFixtures:
 
 
 if __name__ == "__main__":
-    NamedInstanceFixtures().run()
+    NamedInstanceFixtures().run(Path(sys.argv[1]))

@@ -1,6 +1,7 @@
 [workspace]
-members = []
-exclude = ["example", "tests/touch", "tests/text", "example/ohos/vendor/openharmony-ability", "example/ohos/vendor/openharmony-ability/crates/*"]
+members = ["tests/text"]
+default-members = ["."]
+exclude = ["example", "tests/touch", "example/ohos/vendor/openharmony-ability", "example/ohos/vendor/openharmony-ability/crates/*"]
 resolver = "2"
 
 [workspace.package]
@@ -69,6 +70,7 @@ default = ["gles"]
 gles = ["wgpu/gles"]
 vulkan = ["wgpu/vulkan"]
 native-vsync = ["dep:ohos-vsync-binding"]
+grid = ["dep:harfrust"]
 
 [lib]
 name = "gpui_ohos"
@@ -80,7 +82,7 @@ gpui.workspace = true
 anyhow.workspace = true
 bytemuck.workspace = true
 cosmic-text.workspace = true
-harfrust.workspace = true
+harfrust = { workspace = true, optional = true }
 swash.workspace = true
 unicode-segmentation.workspace = true
 etagere.workspace = true
