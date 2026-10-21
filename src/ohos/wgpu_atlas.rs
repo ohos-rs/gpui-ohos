@@ -82,15 +82,13 @@ impl WgpuAtlas {
     }
 
     /// Encode private GPU instance flags without changing GPUI's scene ABI.
-    pub fn encode_image_alpha(&self, sprites: &mut [gpui::PolychromeSprite]) {
+    pub fn encode_image_alpha<'a>(
+        &self,
+        sprites: &'a [gpui::PolychromeSprite],
+        scratch: &'a mut Vec<gpui::PolychromeSprite>,
+    ) -> &'a [gpui::PolychromeSprite] {
         let state = self.0.lock();
-        for sprite in sprites {
-            sprite.pad = state
-                .image_flags
-                .get(&(sprite.tile.texture_id, sprite.tile.tile_id.0))
-                .copied()
-                .unwrap_or(0);
-        }
+        super::image_alpha::encode_sprite_flags(&state.image_flags, sprites, scratch)
     }
 }
 

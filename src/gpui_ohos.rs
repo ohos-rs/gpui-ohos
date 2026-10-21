@@ -14,4 +14,4 @@ pub use ohos::{
     GridTextCell, PlatformServices, SyntheticFontStyle,
 };
 
-pub use ohos::{PremultipliedImage, RasterImage};
+pub use ohos::{ImagePolicy, ImageRegistrationError, PremultipliedImage, RasterImage};

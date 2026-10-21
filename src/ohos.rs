@@ -84,4 +84,4 @@ impl PlatformServices {
     }
 }
 
-pub use image_alpha::{PremultipliedImage, RasterImage};
+pub use image_alpha::{ImagePolicy, ImageRegistrationError, PremultipliedImage, RasterImage};

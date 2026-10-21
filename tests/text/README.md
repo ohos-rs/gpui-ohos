@@ -32,8 +32,15 @@ metrics on `GridLayoutRequest` keep every fallback face on that exact baseline.
 `FontCatalog::face_data_for_id` exposes a shaped run's exact bytes, TTC index,
 design weight and synthetic style. Embedders can own a separate raster engine
 without retaining borrowed slices or inventing a different font identity.
-The harness also checks premultiplied-image registration lifetime; image encoding
-is explicit and leaves other images unchanged.
+The harness also checks typed image-policy conflicts, duplicate and cloned owner
+lifetimes, concurrent lookup/cleanup, and tile policy retention. It executes the
+production sprite encoder with a truly empty metadata map and verifies that it
+returns the original slice without allocating or touching scratch storage.
+Run only these regressions with:
+
+```sh
+cargo test --manifest-path tests/text/Cargo.toml --release --locked image_alpha
+```
 
 Window backdrop checks exercise the actual public GPUI configuration entry,
 per-window radius ownership and disposal, and radius-aware request equality.
