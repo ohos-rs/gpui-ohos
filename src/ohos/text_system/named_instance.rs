@@ -23,10 +23,10 @@ impl NamedInstance {
         Some(Self {
             coordinates: face
                 .variations()
-                .zip(values.chunks_exact(4))
+                .zip(values.as_chunks::<4>().0)
                 .map(|(axis, bytes)| FontDesignCoordinate {
                     tag: axis.tag().to_be_bytes(),
-                    value: i32::from_be_bytes(bytes.try_into().expect("four-byte coordinate")),
+                    value: i32::from_be_bytes(*bytes),
                 })
                 .collect(),
         })
