@@ -84,29 +84,33 @@ impl Fallback for OhosFontFallback {
 
 use unicode_segmentation::UnicodeSegmentation;
 
+#[cfg(feature = "grid")]
 #[path = "text_system/grid.rs"]
 mod grid;
 #[path = "text_system/named_instance.rs"]
 mod named_instance;
-#[cfg(test)]
-#[path = "text_system/named_instances_tests.rs"]
-mod named_instances_tests;
+#[cfg(feature = "grid")]
 pub use grid::{GridLayoutError, GridLayoutRequest, GridTextCell};
 
 pub(crate) struct OhosTextSystem(RwLock<OhosTextSystemState>);
 
-/// A stable handle to the same font database used by GPUI shaping and painting.
+/// An experimental handle to the font database used by GPUI shaping and painting.
 /// Resolved descriptors identify exact faces and can be used in ordinary TextRuns.
+///
+/// This API and its associated face, coordinate and synthesis types are unstable
+/// and may change between releases. Font identities remain immutable at runtime.
 #[derive(Clone)]
 pub struct FontCatalog(Arc<OhosTextSystem>);
 
-/// An effective design coordinate read from a font engine, in signed 16.16.
+/// An experimental design coordinate read from a font engine, in signed 16.16.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct FontDesignCoordinate {
     pub tag: [u8; 4],
     pub value: i32,
 }
 
+/// Experimental face data; see [`FontCatalog`] for API stability.
+///
 /// Keeps the exact registered font bytes alive while an embedding font engine
 /// reads them. The design weight matches this face's shaping/raster coordinate.
 pub struct FontFaceData {
@@ -141,6 +145,7 @@ impl FontFaceData {
     }
 }
 
+/// Experimental synthetic style; see [`FontCatalog`] for API stability.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct SyntheticFontStyle {
     pub bold: bool,
@@ -168,6 +173,7 @@ struct OhosTextSystemState {
     synthetic_scaler: swash::scale::ScaleContext,
     synthetic_images:
         HashMap<(CacheKey, SyntheticFontStyle, FontId), Option<cosmic_text::SwashImage>>,
+    #[cfg(feature = "grid")]
     grid_shaper: grid::GridShaper,
 }
 
@@ -180,14 +186,17 @@ struct LoadedFont {
     coordinates: SmallVec<[i16; 4]>,
     synthetic: SyntheticFontStyle,
     design_coordinates: Arc<[FontDesignCoordinate]>,
+    #[cfg(feature = "grid")]
     variable_shaper: Option<VariableShaper>,
 }
 
+#[cfg(feature = "grid")]
 struct VariableShaper {
     index: u32,
     data: harfrust::ShaperData,
     instance: harfrust::ShaperInstance,
 }
+#[cfg(feature = "grid")]
 impl VariableShaper {
     fn new(
         font: &CosmicTextFont,
@@ -236,6 +245,7 @@ impl LoadedFont {
             coordinates,
             synthetic: SyntheticFontStyle::default(),
             design_coordinates: Arc::from([]),
+            #[cfg(feature = "grid")]
             variable_shaper: None,
         }
     }
@@ -272,6 +282,7 @@ impl OhosTextSystemState {
             registered_faces: HashMap::default(),
             synthetic_scaler: swash::scale::ScaleContext::new(),
             synthetic_images: HashMap::default(),
+            #[cfg(feature = "grid")]
             grid_shaper: grid::GridShaper::default(),
         }
     }
@@ -440,7 +451,7 @@ impl FontCatalog {
         state.register_face(key)
     }
 
-    /// Register an immutable fixed-grid face with the engine's effective axes.
+    /// Register an immutable face with the engine's effective axes.
     /// The resulting FontId fixes axes, features and synthetic style together.
     pub fn with_design_coordinates(
         &self,
@@ -590,7 +601,6 @@ impl OhosTextSystemState {
         );
         loaded.synthetic = key.synthetic;
         if !key.design_coordinates.is_empty() {
-            let index = self.font_system.db().face(key.id)?.index;
             loaded.coordinates = loaded
                 .font
                 .as_swash()
@@ -601,11 +611,15 @@ impl OhosTextSystemState {
                         .map(|v| (u32::from_be_bytes(v.tag), v.value as f32 / 65536.)),
                 )
                 .collect();
-            loaded.variable_shaper = Some(VariableShaper::new(
-                &loaded.font,
-                index,
-                &key.design_coordinates,
-            )?);
+            #[cfg(feature = "grid")]
+            {
+                let index = self.font_system.db().face(key.id)?.index;
+                loaded.variable_shaper = Some(VariableShaper::new(
+                    &loaded.font,
+                    index,
+                    &key.design_coordinates,
+                )?);
+            }
             loaded.design_coordinates = key.design_coordinates.clone();
         }
         let id = FontId(self.loaded_fonts.len());
@@ -1304,557 +1318,4 @@ fn has_color_glyphs(font: &CosmicTextFont) -> bool {
     [*b"COLR", *b"CBDT", *b"sbix"]
         .into_iter()
         .any(|tag| font.table(u32::from_be_bytes(tag)).is_some())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    pub(super) fn isolated() -> OhosTextSystem {
-        let system = OhosTextSystem(RwLock::new(OhosTextSystemState::new(
-            FontSystem::new_with_locale_and_db(
-                "en-US".into(),
-                cosmic_text::fontdb::Database::new(),
-            ),
-            true,
-        )));
-        system
-            .add_fonts(vec![
-                Cow::Borrowed(include_bytes!("../../tests/text/fonts/primary.ttf")),
-                Cow::Borrowed(include_bytes!("../../tests/text/fonts/primary-bold.ttf")),
-                Cow::Borrowed(include_bytes!("../../tests/text/fonts/first.ttf")),
-                Cow::Borrowed(include_bytes!("../../tests/text/fonts/second.ttf")),
-            ])
-            .unwrap();
-        system
-    }
-
-    #[test]
-    fn general_ui_keeps_bidi_order_and_honors_gpos_offsets() {
-        let system = isolated();
-        system
-            .add_fonts(vec![
-                Cow::Borrowed(include_bytes!("../../tests/text/fonts/direction.ttf")),
-                Cow::Borrowed(include_bytes!("../../tests/text/fonts/positioned.ttf")),
-            ])
-            .unwrap();
-        let rtl = shape(&system, &gpui::font("Parity Direction"), "אב");
-        assert!(
-            rtl.runs[0].glyphs[0].position.x > rtl.runs[0].glyphs[1].position.x,
-            "general UI retains RTL visual positions"
-        );
-        let positioned = shape(&system, &gpui::font("Parity Positioned"), "AB");
-        assert!((f32::from(positioned.runs[0].glyphs[0].position.x) - 2.4).abs() < 0.001);
-        assert!((f32::from(positioned.runs[0].glyphs[0].position.y) + 1.6).abs() < 0.001);
-    }
-
-    fn stack(fallbacks: &[&str]) -> Font {
-        let mut font = gpui::font("Parity Primary");
-        font.fallbacks = Some(gpui::FontFallbacks::from_fonts(
-            fallbacks.iter().map(|name| (*name).to_owned()).collect(),
-        ));
-        font
-    }
-
-    pub(super) fn shape(system: &OhosTextSystem, font: &Font, text: &str) -> LineLayout {
-        let font_id = system.font_id(font).unwrap();
-        system.layout_line(
-            text,
-            gpui::px(20.),
-            &[FontRun {
-                len: text.len(),
-                font_id,
-            }],
-        )
-    }
-
-    fn families(system: &OhosTextSystem, line: &LineLayout) -> Vec<String> {
-        let state = system.0.read();
-        line.runs
-            .iter()
-            .map(|run| {
-                state
-                    .font_system
-                    .db()
-                    .face(state.loaded_font(run.font_id).font.id())
-                    .unwrap()
-                    .families[0]
-                    .0
-                    .clone()
-            })
-            .collect()
-    }
-
-    #[test]
-    fn configured_fallback_order_survives_shaping_and_distinguishes_cache_entries() {
-        let system = isolated();
-        let first = stack(&["Parity First", "Parity Second"]);
-        let second = stack(&["Parity Second", "Parity First"]);
-        let first_id = system.font_id(&first).unwrap();
-        assert_eq!(system.font_id(&first).unwrap(), first_id);
-        assert_ne!(system.font_id(&second).unwrap(), first_id);
-        assert_eq!(
-            families(&system, &shape(&system, &first, "AΩB")),
-            ["Parity Primary", "Parity First", "Parity Primary"]
-        );
-        assert_eq!(
-            families(&system, &shape(&system, &second, "AΩB")),
-            ["Parity Primary", "Parity Second", "Parity Primary"]
-        );
-    }
-
-    #[test]
-    fn an_unavailable_primary_uses_the_first_available_requested_family() {
-        let system = isolated();
-        let mut font = stack(&["Missing Too", "Parity Second", "Parity First"]);
-        font.family = "Missing Primary".into();
-        assert_eq!(
-            families(&system, &shape(&system, &font, "AΩ")),
-            ["Parity Second"]
-        );
-    }
-
-    #[test]
-    fn combining_clusters_choose_a_face_covering_the_entire_cluster() {
-        let system = isolated();
-        let font = stack(&["Parity First"]);
-        assert_eq!(
-            families(&system, &shape(&system, &font, "A\u{301}")),
-            ["Parity First"]
-        );
-    }
-
-    #[test]
-    fn fallback_ligatures_respect_features_and_font_stack_cache_identity() {
-        let system = isolated();
-        let enabled = stack(&["Parity First"]);
-        let mut disabled = enabled.clone();
-        disabled.features = FontFeatures(Arc::new(vec![("liga".into(), 0)]));
-        let with = shape(&system, &enabled, "ΩΩ");
-        let without = shape(&system, &disabled, "ΩΩ");
-        assert_eq!(families(&system, &with), ["Parity First"]);
-        assert_eq!(
-            with.runs.iter().map(|run| run.glyphs.len()).sum::<usize>(),
-            1
-        );
-        assert_eq!(
-            without
-                .runs
-                .iter()
-                .map(|run| run.glyphs.len())
-                .sum::<usize>(),
-            2
-        );
-        assert_eq!(shape(&system, &enabled, "ΩΩ").runs[0].glyphs.len(), 1);
-    }
-
-    #[test]
-    fn requested_weight_selects_the_matching_face_and_new_fonts_invalidate_resolution() {
-        let system = isolated();
-        let regular = stack(&[]);
-        let bold = regular.clone().bold();
-        let regular_id = system.font_id(&regular).unwrap();
-        let metrics = system.font_metrics(regular_id);
-        assert_eq!(metrics.descent, -200.);
-        assert_eq!(metrics.bounding_box.size.height, 1000.);
-        let bold_id = system.font_id(&bold).unwrap();
-        let glyph = system.glyph_for_char(regular_id, 'A').unwrap();
-        assert_eq!(system.advance(regular_id, glyph).unwrap().width, 500.);
-        assert_eq!(
-            system
-                .advance(bold_id, system.glyph_for_char(bold_id, 'A').unwrap())
-                .unwrap()
-                .width,
-            600.
-        );
-        let mut missing = stack(&["Parity Primary"]);
-        missing.family = "Parity New".into();
-        let previous = system.font_id(&missing).unwrap();
-        assert_eq!(
-            system.0.read().loaded_font(previous).font.id(),
-            system.0.read().loaded_font(regular_id).font.id()
-        );
-        system
-            .add_fonts(vec![Cow::Borrowed(include_bytes!(
-                "../../tests/text/fonts/new.ttf"
-            ))])
-            .unwrap();
-        assert_eq!(
-            families(&system, &shape(&system, &missing, "AΩ")),
-            ["Parity New"]
-        );
-        assert_eq!(
-            system.glyph_for_char(regular_id, 'A'),
-            Some(glyph),
-            "previously shaped font IDs remain valid"
-        );
-    }
-
-    #[test]
-    fn variable_weight_is_shared_by_shaping_advance_and_rasterization() {
-        let system = isolated();
-        system
-            .add_fonts(vec![Cow::Borrowed(include_bytes!(
-                "../../tests/text/fonts/variable.ttf"
-            ))])
-            .unwrap();
-        let regular = gpui::font("Parity Variable");
-        let bold = regular.clone().bold();
-        let regular_line = shape(&system, &regular, "AB");
-        let bold_line = shape(&system, &bold, "AB");
-        assert!((f32::from(bold_line.width) - f32::from(regular_line.width) * 1.2).abs() < 0.01);
-        let mut widths = Vec::new();
-        for (font, advance) in [(&regular, 500.), (&bold, 600.)] {
-            let id = system.font_id(font).unwrap();
-            let glyph = system.glyph_for_char(id, 'A').unwrap();
-            assert!((system.advance(id, glyph).unwrap().width - advance).abs() < 0.01);
-            let params = RenderGlyphParams {
-                font_id: id,
-                glyph_id: glyph,
-                font_size: gpui::px(20.),
-                subpixel_variant: point(0, 0),
-                scale_factor: 1.,
-                is_emoji: false,
-                subpixel_rendering: false,
-                dilation: 0,
-            };
-            let bounds = system.glyph_raster_bounds(&params).unwrap();
-            widths.push(bounds.size.width);
-            let (size, pixels) = system.rasterize_glyph(&params, bounds).unwrap();
-            assert_eq!(pixels.len(), size.width.0 as usize * size.height.0 as usize);
-        }
-        assert!(
-            widths[1] > widths[0],
-            "bold rasterization must use the same variable weight as shaping"
-        );
-    }
-
-    #[test]
-    fn catalog_preserves_exact_family_named_style_and_face_identity() {
-        let system = Arc::new(isolated());
-        let catalog = FontCatalog::new(system.clone());
-        let requested = gpui::font("Parity Primary");
-        assert!(
-            catalog
-                .resolve(&gpui::font("Absent Family"), None)
-                .is_none()
-        );
-        assert!(catalog.resolve(&requested.clone().italic(), None).is_none());
-        assert!(catalog.resolve(&requested, Some("Absent Style")).is_none());
-        let regular = catalog.resolve(&requested, None).unwrap();
-        let named = catalog.resolve(&requested, Some("bold")).unwrap();
-        let bold = catalog.resolve(&requested.clone().bold(), None).unwrap();
-        assert_eq!(named, bold);
-        assert_ne!(regular, bold);
-        assert_eq!(
-            system.font_id(&named).unwrap(),
-            shape(&system, &named, "A").runs[0].font_id
-        );
-        for (font, width) in [(&regular, 500.), (&bold, 600.)] {
-            let id = system.font_id(font).unwrap();
-            assert_eq!(
-                system
-                    .advance(id, system.glyph_for_char(id, 'A').unwrap())
-                    .unwrap()
-                    .width,
-                width
-            );
-        }
-        assert!(catalog.supports(&regular, "AB", None));
-        assert!(!catalog.supports(&regular, "A\u{301}", None));
-        assert!(catalog.has_text(&regular));
-    }
-
-    #[test]
-    fn named_variable_weight_instances_use_their_coordinates_in_shaping_and_painting() {
-        let system = Arc::new(isolated());
-        system
-            .add_fonts(vec![Cow::Borrowed(include_bytes!(
-                "../../tests/text/fonts/variable.ttf"
-            ))])
-            .unwrap();
-        let catalog = FontCatalog::new(system.clone());
-        let requested = gpui::font("Parity Variable");
-        let regular = catalog.resolve(&requested, Some("Regular")).unwrap();
-        let named_bold = catalog.resolve(&requested, Some("Bold")).unwrap();
-        assert_eq!(
-            named_bold,
-            catalog.resolve(&requested, Some("bOlD")).unwrap()
-        );
-        assert_ne!(regular, named_bold);
-        assert_eq!(f32::from(shape(&system, &named_bold, "AB").width), 24.);
-        let id = system.font_id(&named_bold).unwrap();
-        assert_eq!(
-            system
-                .advance(id, system.glyph_for_char(id, 'A').unwrap())
-                .unwrap()
-                .width,
-            600.
-        );
-    }
-
-    #[test]
-    fn native_presentation_checks_the_actual_glyph_and_discovery_preserves_features() {
-        let system = Arc::new(isolated());
-        system
-            .add_fonts(vec![
-                Cow::Borrowed(include_bytes!("../../tests/text/fonts/emoji-text.ttf")),
-                Cow::Borrowed(include_bytes!("../../tests/text/fonts/emoji-color.ttf")),
-            ])
-            .unwrap();
-        let catalog = FontCatalog::new(system.clone());
-        let features = FontFeatures(Arc::new(vec![("liga".into(), 0)]));
-        let text = catalog.discover("😀", false, &features).unwrap();
-        let color = catalog.discover("😀", true, &features).unwrap();
-        assert_ne!(text, color);
-        for (font, emoji) in [(&text, false), (&color, true)] {
-            assert_eq!(font.features, features);
-            assert!(catalog.supports(font, "😀\u{fe0f}", None));
-            assert!(catalog.supports(font, "😀", Some(emoji)));
-            assert!(!catalog.supports(font, "😀", Some(!emoji)));
-            assert_eq!(shape(&system, font, "😀").runs[0].glyphs[0].is_emoji, emoji);
-        }
-        assert!(
-            catalog.supports(&color, "B", Some(false)),
-            "mixed color fonts still have mask glyphs"
-        );
-        assert!(!catalog.supports(&color, "B", Some(true)));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn native_font_inventory_sorts_files_follows_links_and_breaks_directory_cycles() {
-        struct Directory(std::path::PathBuf);
-        impl Drop for Directory {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        let directory =
-            Directory(std::env::temp_dir().join(format!("gpui-font-links-{}", std::process::id())));
-        std::fs::create_dir_all(directory.0.join("nested")).unwrap();
-        std::fs::write(
-            directory.0.join("z.ttf"),
-            include_bytes!("../../tests/text/fonts/primary.ttf"),
-        )
-        .unwrap();
-        std::fs::write(
-            directory.0.join("nested/a.ttf"),
-            include_bytes!("../../tests/text/fonts/primary-bold.ttf"),
-        )
-        .unwrap();
-        std::os::unix::fs::symlink(directory.0.join("z.ttf"), directory.0.join("alias.ttf"))
-            .unwrap();
-        std::os::unix::fs::symlink(&directory.0, directory.0.join("nested/cycle")).unwrap();
-        let mut db = cosmic_text::fontdb::Database::new();
-        OhosTextSystemState::load_font_directories(
-            &mut db,
-            &[&directory.0, &directory.0.join("nested")],
-        );
-        assert_eq!(
-            db.faces().count(),
-            2,
-            "overlapping roots, aliases and cycles must not duplicate faces"
-        );
-        assert_eq!(
-            db.faces().map(|face| face.weight.0).collect::<Vec<_>>(),
-            [700, 400],
-            "inventory order follows sorted canonical file paths"
-        );
-    }
-
-    #[test]
-    fn synthetic_faces_keep_advance_but_have_distinct_rasters_and_cache_entries() {
-        let system = Arc::new(isolated());
-        let catalog = FontCatalog::new(system.clone());
-        let regular = catalog.resolve(&gpui::font("Parity First"), None).unwrap();
-        let bold = catalog
-            .synthesize(
-                &regular,
-                SyntheticFontStyle {
-                    bold: true,
-                    italic: false,
-                },
-            )
-            .unwrap();
-        let italic = catalog
-            .synthesize(
-                &regular,
-                SyntheticFontStyle {
-                    bold: false,
-                    italic: true,
-                },
-            )
-            .unwrap();
-        let both = catalog
-            .synthesize(
-                &bold,
-                SyntheticFontStyle {
-                    bold: false,
-                    italic: true,
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            catalog
-                .synthesize(
-                    &italic,
-                    SyntheticFontStyle {
-                        bold: true,
-                        italic: false
-                    }
-                )
-                .unwrap(),
-            both
-        );
-        let mut rasters = Vec::new();
-        for font in [&regular, &bold, &italic, &both] {
-            let id = system.font_id(font).unwrap();
-            let line = shape(&system, font, "AB");
-            assert_eq!(line.runs[0].font_id, id);
-            assert_eq!(f32::from(line.width), 28.);
-            let glyph = system.glyph_for_char(id, 'A').unwrap();
-            assert_eq!(system.advance(id, glyph).unwrap().width, 700.);
-            let params = RenderGlyphParams {
-                font_id: id,
-                glyph_id: glyph,
-                font_size: gpui::px(32.),
-                subpixel_variant: point(0, 0),
-                scale_factor: 1.,
-                is_emoji: false,
-                subpixel_rendering: false,
-                dilation: 0,
-            };
-            let bounds = system.glyph_raster_bounds(&params).unwrap();
-            let raster = system.rasterize_glyph(&params, bounds).unwrap();
-            assert_eq!(system.rasterize_glyph(&params, bounds).unwrap(), raster);
-            rasters.push(raster);
-        }
-        for left in 0..rasters.len() {
-            for right in left + 1..rasters.len() {
-                assert_ne!(rasters[left], rasters[right]);
-            }
-        }
-        // System fallback must not accidentally borrow a synthetic ID for the
-        // same underlying file when weight and OpenType features are equal.
-        let regular_id = system.font_id(&regular).unwrap();
-        let mut state = system.0.write();
-        let loaded = state.loaded_font(regular_id);
-        let (id, weight) = (loaded.font.id(), loaded.font_weight);
-        let fallback = state.font_id_for_cosmic_id(id, weight, regular_id);
-        assert_eq!(
-            state.loaded_font(fallback).synthetic,
-            SyntheticFontStyle::default()
-        );
-    }
-    #[test]
-    fn effective_variable_axes_share_shaping_metrics_raster_and_immutable_identity() {
-        let system = Arc::new(isolated());
-        system
-            .add_fonts(vec![Cow::Borrowed(include_bytes!(
-                "../../tests/text/fonts/variable.ttf"
-            ))])
-            .unwrap();
-        let catalog = FontCatalog::new(system.clone());
-        let base = catalog
-            .resolve(&gpui::font("Parity Variable"), None)
-            .unwrap();
-        let mut rasters = Vec::new();
-        let mut ids = Vec::new();
-        for (weight, advance) in [(400, 500), (700, 600)] {
-            let axes = [FontDesignCoordinate {
-                tag: *b"wght",
-                value: weight * 65536,
-            }];
-            let font = catalog.with_design_coordinates(&base, &axes).unwrap();
-            assert_eq!(font, catalog.with_design_coordinates(&base, &axes).unwrap());
-            let id = system.font_id(&font).unwrap();
-            ids.push(id);
-            assert_eq!(catalog.face_data(&font).unwrap().design_coordinates(), axes);
-            let glyph = system.glyph_for_char(id, 'A').unwrap();
-            assert!((system.advance(id, glyph).unwrap().width - advance as f32).abs() < 0.01);
-            {
-                let state = system.0.read();
-                let loaded = state.loaded_font(id);
-                let shaper = loaded
-                    .variable_shaper
-                    .as_ref()
-                    .unwrap()
-                    .shaper(&loaded.font);
-                let mut buffer = harfrust::UnicodeBuffer::new();
-                buffer.push_str("A");
-                buffer.guess_segment_properties();
-                let shaped = shaper.shape(buffer, &[]);
-                assert_eq!(shaped.glyph_positions()[0].x_advance, advance);
-            }
-            let params = RenderGlyphParams {
-                font_id: id,
-                glyph_id: glyph,
-                font_size: gpui::px(20.),
-                subpixel_variant: point(0, 0),
-                scale_factor: 1.,
-                is_emoji: false,
-                subpixel_rendering: false,
-                dilation: 0,
-            };
-            let bounds = system.glyph_raster_bounds(&params).unwrap();
-            rasters.push((bounds, system.rasterize_glyph(&params, bounds).unwrap()));
-        }
-        assert_ne!(ids[0], ids[1]);
-        assert_ne!(rasters[0], rasters[1]);
-        let params = RenderGlyphParams {
-            font_id: ids[0],
-            glyph_id: system.glyph_for_char(ids[0], 'A').unwrap(),
-            font_size: gpui::px(20.),
-            subpixel_variant: point(0, 0),
-            scale_factor: 1.,
-            is_emoji: false,
-            subpixel_rendering: false,
-            dilation: 0,
-        };
-        let bounds = system.glyph_raster_bounds(&params).unwrap();
-        assert_eq!(
-            (bounds, system.rasterize_glyph(&params, bounds).unwrap()),
-            rasters[0]
-        );
-        assert!(
-            catalog
-                .face_data(&base)
-                .unwrap()
-                .design_coordinates()
-                .is_empty()
-        );
-        assert!(
-            catalog
-                .with_design_coordinates(
-                    &base,
-                    &[FontDesignCoordinate {
-                        tag: *b"abcd",
-                        value: 0
-                    }]
-                )
-                .is_none()
-        );
-        let synthetic = catalog
-            .synthesize(
-                &catalog
-                    .with_design_coordinates(
-                        &base,
-                        &[FontDesignCoordinate {
-                            tag: *b"wght",
-                            value: 700 * 65536,
-                        }],
-                    )
-                    .unwrap(),
-                SyntheticFontStyle {
-                    bold: true,
-                    italic: true,
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            catalog.face_data(&synthetic).unwrap().design_coordinates()[0].value,
-            700 * 65536
-        );
-    }
 }

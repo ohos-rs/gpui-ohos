@@ -12,7 +12,7 @@ fn fixture(bytes: &'static [u8]) -> (Arc<OhosTextSystem>, FontCatalog) {
 
 #[test]
 fn named_multi_axis_instances_preserve_exact_values_and_separate_cached_shapers() {
-    let (system, catalog) = fixture(include_bytes!("../../../tests/text/fonts/multi-axis.ttf"));
+    let (system, catalog) = fixture(font_fixture!("multi-axis.ttf"));
     let requested = gpui::font("Parity Multi Axis");
     let mut faces = Vec::new();
     for (name, weight, width, advance) in [
@@ -45,18 +45,29 @@ fn named_multi_axis_instances_preserve_exact_values_and_separate_cached_shapers(
         let id = system.font_id(&font).unwrap();
         assert!(!faces.contains(&id));
         faces.push(id);
-        let state = system.0.read();
-        let loaded = state.loaded_font(id);
-        let mut buffer = harfrust::UnicodeBuffer::new();
-        buffer.push_str("A");
-        buffer.guess_segment_properties();
-        let shaped = loaded
-            .variable_shaper
-            .as_ref()
-            .unwrap()
-            .shaper(&loaded.font)
-            .shape(buffer, &[]);
-        assert_eq!(shaped.glyph_positions()[0].x_advance, advance);
+        assert_eq!(
+            system
+                .advance(id, system.glyph_for_char(id, 'A').unwrap())
+                .unwrap()
+                .width
+                .round(),
+            advance as f32
+        );
+        #[cfg(feature = "grid")]
+        {
+            let state = system.0.read();
+            let loaded = state.loaded_font(id);
+            let mut buffer = harfrust::UnicodeBuffer::new();
+            buffer.push_str("A");
+            buffer.guess_segment_properties();
+            let shaped = loaded
+                .variable_shaper
+                .as_ref()
+                .unwrap()
+                .shaper(&loaded.font)
+                .shape(buffer, &[]);
+            assert_eq!(shaped.glyph_positions()[0].x_advance, advance);
+        }
     }
     assert!(catalog.resolve(&requested, Some("Missing")).is_none());
     let font = catalog.resolve(&requested, Some("Fractional")).unwrap();
@@ -85,7 +96,7 @@ fn named_multi_axis_instances_preserve_exact_values_and_separate_cached_shapers(
 
 #[test]
 fn named_instances_without_a_weight_axis_are_resolved_and_rasterized() {
-    let (system, catalog) = fixture(include_bytes!("../../../tests/text/fonts/width-axis.ttf"));
+    let (system, catalog) = fixture(font_fixture!("width-axis.ttf"));
     let requested = gpui::font("Parity Width Axis");
     let mut rasters = Vec::new();
     for (name, width) in [("Narrow", 75), ("Regular", 100), ("Wide", 125)] {
@@ -111,6 +122,31 @@ fn named_instances_without_a_weight_axis_are_resolved_and_rasterized() {
         let bounds = system.glyph_raster_bounds(&params).unwrap();
         rasters.push((bounds, system.rasterize_glyph(&params, bounds).unwrap()));
     }
+
     assert_ne!(rasters[0], rasters[1]);
     assert_ne!(rasters[1], rasters[2]);
+}
+
+#[test]
+fn default_subfamily_keeps_axes_without_an_explicit_named_instance_record() {
+    let bytes = font_fixture!("default-axis.ttf");
+    let (_, catalog) = fixture(bytes);
+    let font = catalog
+        .resolve(&gpui::font("Parity Multi Axis"), Some("Regular"))
+        .unwrap();
+    let data = catalog.face_data(&font).unwrap();
+    assert_eq!(data.bytes(), bytes);
+    assert_eq!(
+        data.design_coordinates(),
+        [
+            FontDesignCoordinate {
+                tag: *b"wght",
+                value: 400 * 65536,
+            },
+            FontDesignCoordinate {
+                tag: *b"wdth",
+                value: 100 * 65536,
+            },
+        ]
+    );
 }

@@ -10,7 +10,7 @@ publish = false
 native-vsync = []
 
 [dependencies]
-gpui = { git = "https://github.com/ohos-rs/zed", rev = "422c92ace17512aa5ea66f73dc14044008d3e87d", default-features = false }
+gpui = { git = "https://github.com/ohos-rs/zed", rev = "00542402c992e7a041f110c7d2386c60a40b7038", default-features = false }
 rustc-hash = "2"
 log = "0.4"
 libc = "0.2"

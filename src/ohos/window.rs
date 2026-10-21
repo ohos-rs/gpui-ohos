@@ -49,9 +49,9 @@ use crate::{
     ForegroundExecutor, FrameRequestSource, GestureTuning, GpuSpecs, KeyDownEvent, Keystroke,
     Modifiers, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent,
     NavigationDirection, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, Task, TextInputAction,
-    TextInputConfiguration, TextInputStateChange, TouchEvent, TouchId, TouchPhase,
+    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, PromptStyle,
+    RequestFrameOptions, ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, Task,
+    TextInputAction, TextInputConfiguration, TextInputStateChange, TouchEvent, TouchId, TouchPhase,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
     WindowDecorations, WindowInsets, WindowParams, WindowVisibility, accesskit, point, px, size,
 };
@@ -3930,6 +3930,17 @@ impl PlatformWindow for OhosWindowHandle {
         self.with_window(|window| window.prompt(level, msg, detail, answers))
     }
 
+    fn prompt_with_style(
+        &self,
+        level: PromptLevel,
+        message: &str,
+        detail: Option<&str>,
+        answers: &[PromptButton],
+        style: Option<&PromptStyle>,
+    ) -> Option<oneshot::Receiver<usize>> {
+        self.with_window(|window| window.prompt_with_style(level, message, detail, answers, style))
+    }
+
     fn activate(&self) {
         self.with_window(|window| window.activate())
     }
@@ -4236,6 +4247,17 @@ impl PlatformWindow for OhosWindow {
         detail: Option<&str>,
         answers: &[PromptButton],
     ) -> Option<oneshot::Receiver<usize>> {
+        self.prompt_with_style(level, msg, detail, answers, None)
+    }
+
+    fn prompt_with_style(
+        &self,
+        level: PromptLevel,
+        msg: &str,
+        detail: Option<&str>,
+        answers: &[PromptButton],
+        style: Option<&PromptStyle>,
+    ) -> Option<oneshot::Receiver<usize>> {
         let client = self.window_client()?;
         if answers.is_empty() || answers.len() > 128 {
             return None;
@@ -4258,13 +4280,28 @@ impl PlatformWindow for OhosWindow {
                 .position(PromptButton::is_cancel)
                 .map(|index| index as u32),
             anchor: None,
+            appearance: style.map(|style| {
+                // GPUI packs RGBA; ArkUI numeric colors are ARGB.
+                let argb = |color: gpui::Rgba| u32::from(color).rotate_right(8);
+                openharmony_ability_plugin_window::WindowPromptAppearance {
+                    background: argb(style.background),
+                    foreground: argb(style.foreground),
+                    muted_foreground: argb(style.muted_foreground),
+                    primary: argb(style.primary),
+                    primary_foreground: argb(style.primary_foreground),
+                    border: argb(style.border),
+                    focus: argb(style.focus),
+                }
+            }),
         };
         let (sender, receiver) = oneshot::channel();
         self.foreground_executor
             .spawn(async move {
                 match client.show_prompt(request).await {
                     Ok(index) => {
-                        let _ = sender.send(index as usize);
+                        if sender.send(index as usize).is_err() {
+                            log::debug!("OHOS native prompt receiver was dropped");
+                        }
                     }
                     Err(error) => warn!("OHOS native prompt failed: {error}"),
                 }
@@ -4657,6 +4694,16 @@ impl PlatformWindow for OhosWindow {
         // Use WGPU renderer to render the scene.
         if let Some(ref mut renderer) = *self.renderer.borrow_mut() {
             let presentation = renderer.draw(scene);
+            if self.file_access.on_presentation(presentation) {
+                let file_access = self.file_access.clone();
+                self.background_executor
+                    .spawn(async move {
+                        if let Err(error) = file_access.restore() {
+                            warn!("Failed to restore OHOS file access: {error:#}");
+                        }
+                    })
+                    .detach();
+            }
             if self.presentation.record(presentation) {
                 self.frames.request();
             }

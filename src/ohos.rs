@@ -14,6 +14,7 @@ mod launch;
 mod native_frames;
 mod path_targets;
 mod platform;
+mod platform_options;
 mod presentation;
 mod quad_pipeline;
 mod render_cache;
@@ -33,17 +34,7 @@ mod workers;
 
 use openharmony_ability::OpenHarmonyApp;
 
-#[derive(Clone, Copy)]
-pub struct PlatformOptions {
-    /// Disable native menus when the application renders and dispatches its own menus.
-    pub native_menus: bool,
-}
-
-impl Default for PlatformOptions {
-    fn default() -> Self {
-        Self { native_menus: true }
-    }
-}
+pub use platform_options::PlatformOptions;
 
 pub fn try_current_platform(
     app: OpenHarmonyApp,
@@ -62,11 +53,11 @@ pub fn current_platform(app: OpenHarmonyApp, _headless: bool) -> std::rc::Rc<dyn
     )
 }
 
-pub use text_system::{
-    FontCatalog, FontDesignCoordinate, FontFaceData, GridLayoutError, GridLayoutRequest,
-    GridTextCell, SyntheticFontStyle,
-};
+pub use text_system::{FontCatalog, FontDesignCoordinate, FontFaceData, SyntheticFontStyle};
+#[cfg(feature = "grid")]
+pub use text_system::{GridLayoutError, GridLayoutRequest, GridTextCell};
 
+/// Experimental font-catalog API; signatures may change between releases.
 /// Platform and font services share face bytes, glyph IDs and immutable descriptors.
 pub struct PlatformServices {
     pub platform: std::rc::Rc<dyn gpui::Platform>,

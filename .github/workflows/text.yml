@@ -1,0 +1,23 @@
+name: Text backend
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-text:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        features: ["", "grid"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r tests/text/requirements.txt
+      - name: Test shared text backend and feature boundary
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: cargo test -p ohos-text-tests --locked --features "${{ matrix.features }}"
