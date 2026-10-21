@@ -13,6 +13,7 @@ mod launch;
 mod native_frames;
 mod path_targets;
 mod platform;
+mod platform_options;
 mod presentation;
 mod quad_pipeline;
 mod render_cache;
@@ -32,17 +33,7 @@ mod workers;
 
 use openharmony_ability::OpenHarmonyApp;
 
-#[derive(Clone, Copy)]
-pub struct PlatformOptions {
-    /// Disable native menus when the application renders and dispatches its own menus.
-    pub native_menus: bool,
-}
-
-impl Default for PlatformOptions {
-    fn default() -> Self {
-        Self { native_menus: true }
-    }
-}
+pub use platform_options::PlatformOptions;
 
 pub fn try_current_platform(
     app: OpenHarmonyApp,

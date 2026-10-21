@@ -293,7 +293,7 @@ dependencies = [
 [[package]]
 name = "collections"
 version = "0.1.0"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 dependencies = [
  "gpui_util",
  "indexmap",
@@ -420,7 +420,7 @@ dependencies = [
 [[package]]
 name = "derive_refineable"
 version = "0.1.0"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -762,7 +762,7 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -824,7 +824,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -835,7 +835,7 @@ dependencies = [
 [[package]]
 name = "gpui_shared_string"
 version = "0.1.0"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 dependencies = [
  "schemars",
  "serde",
@@ -845,7 +845,7 @@ dependencies = [
 [[package]]
 name = "gpui_util"
 version = "0.1.0"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 dependencies = [
  "anyhow",
  "log",
@@ -923,7 +923,7 @@ dependencies = [
 [[package]]
 name = "http_client"
 version = "0.1.0"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1900,7 +1900,7 @@ dependencies = [
 [[package]]
 name = "refineable"
 version = "0.1.0"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 dependencies = [
  "derive_refineable",
 ]
@@ -2029,7 +2029,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 [[package]]
 name = "scheduler"
 version = "0.1.0"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 dependencies = [
  "async-task",
  "backtrace",
@@ -2275,7 +2275,7 @@ dependencies = [
 [[package]]
 name = "sum_tree"
 version = "0.1.0"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 dependencies = [
  "heapless",
  "rayon",
@@ -2913,7 +2913,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[package]]
 name = "ztracing"
 version = "0.1.0"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 dependencies = [
  "tracing",
  "ztracing_macro",
@@ -2922,7 +2922,7 @@ dependencies = [
 [[package]]
 name = "ztracing_macro"
 version = "0.1.0"
-source = "git+https://github.com/ohos-rs/zed?rev=422c92ace17512aa5ea66f73dc14044008d3e87d#422c92ace17512aa5ea66f73dc14044008d3e87d"
+source = "git+https://github.com/ohos-rs/zed?rev=00542402c992e7a041f110c7d2386c60a40b7038#00542402c992e7a041f110c7d2386c60a40b7038"
 
 [[package]]
 name = "zune-core"

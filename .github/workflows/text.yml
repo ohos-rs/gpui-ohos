@@ -12,8 +12,6 @@ jobs:
         features: ["", "grid"]
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
