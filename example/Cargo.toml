@@ -19,15 +19,17 @@ log = "0.4"
 ohos-hilog-binding = { version = "*", features = ["log"] }
 napi-derive-ohos = "=1.2.0"
 napi-ohos = "=1.2.0"
-openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "05ce9195ea66876dc64a9481a76f03abb2ea20db", version = "=1.0.0-beta.3" }
-openharmony-ability-derive = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "05ce9195ea66876dc64a9481a76f03abb2ea20db", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-permission = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "05ce9195ea66876dc64a9481a76f03abb2ea20db", version = "=1.0.0-beta.3" }
+openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
+openharmony-ability-derive = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-permission = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
 
 [features]
-default = ["gles"]
+default = ["gles", "keyboard-text-input", "keyboard-focus-recovery"]
 gles = ["gpui-ohos/gles"]
 vulkan = ["gpui-ohos/vulkan"]
 native-vsync = ["gpui-ohos/native-vsync"]
+keyboard-text-input = ["gpui-ohos/keyboard-text-input"]
+keyboard-focus-recovery = ["gpui-ohos/keyboard-focus-recovery"]
 
 [build-dependencies]
 napi-build-ohos = "=1.2.0"
