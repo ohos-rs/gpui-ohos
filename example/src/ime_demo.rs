@@ -2,9 +2,11 @@ use std::ops::Range;
 
 use gpui_ohos::{
     Bounds, Context, ElementInputHandler, EntityInputHandler, FocusHandle, IntoElement, Pixels,
-    Point, Render, TextInputAction, TextInputConfiguration, UTF16Selection, Window, canvas, div,
-    prelude::*, px, rgb,
+    Point, Render, TextInputAction, TextInputConfiguration, UTF16Selection, Window, actions,
+    canvas, div, prelude::*, px, rgb,
 };
+
+actions!(ime_demo, [CountFocusedMenuChord]);
 
 const ACTIONS: [TextInputAction; 8] = [
     TextInputAction::Search,
@@ -25,6 +27,7 @@ pub(super) struct ImeDemo {
     marked: Option<Range<usize>>,
     action_index: usize,
     confirms: usize,
+    focused_menu_chords: usize,
 }
 
 impl ImeDemo {
@@ -36,6 +39,7 @@ impl ImeDemo {
             marked: None,
             action_index: 0,
             confirms: 0,
+            focused_menu_chords: 0,
         }
     }
 
@@ -81,8 +85,8 @@ impl Render for ImeDemo {
             .flex_col()
             .gap_2()
             .child(format!(
-                "IME action: {:?}; confirms: {}",
-                ACTIONS[self.action_index], self.confirms
+                "IME action: {:?}; confirms: {}; focused Ctrl-Shift-M: {}",
+                ACTIONS[self.action_index], self.confirms, self.focused_menu_chords
             ))
             .child(
                 div()
@@ -101,6 +105,15 @@ impl Render for ImeDemo {
                     .id("ime-input")
                     .relative()
                     .track_focus(&self.focus)
+                    .key_context("ImeDemo")
+                    .on_action(cx.listener(|this, _: &CountFocusedMenuChord, _, cx| {
+                        this.focused_menu_chords += 1;
+                        log::info!(
+                            "GPUI focused menu chord count: {}",
+                            this.focused_menu_chords
+                        );
+                        cx.notify();
+                    }))
                     .h(px(64.))
                     .w_full()
                     .p_2()

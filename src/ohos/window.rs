@@ -18,8 +18,8 @@ use openharmony_ability::{
     arkui::arkui_input_binding::{UIInputAction, UIInputSourceType, UIInputToolType},
     arkui::component::attribute::{ArkUIAttributeBasic, ArkUICommonAttribute},
     ime::{
-        Action as ImeAction, Direction as ImeDirection, EnterKey, IME, ImeAttachmentCancellation,
-        ImeResult, InputType, Rect as ImeCursorRect, TextState,
+        Action as ImeAction, Direction as ImeDirection, EnterKey, IME, ImeResult, InputType,
+        Rect as ImeCursorRect, TextState,
     },
     xcomponent::{
         Action as KeyAction, MouseAction, MouseButton as OhosMouseButton,
@@ -150,7 +150,7 @@ pub(crate) struct OhosWindow {
     ime_action: Cell<TextInputAction>,
     ime_retry_generation: Cell<u64>,
     ime_recovery_pending: Cell<bool>,
-    ime_attachment: RefCell<Option<ImeAttachmentCancellation>>,
+    ime_retry_pending: Cell<bool>,
     pointer_position: Cell<Option<Point<Pixels>>>,
     pointer_screen_position: Cell<Option<(i64, i64)>>,
     pressed_mouse_button: Cell<Option<MouseButton>>,
@@ -733,7 +733,7 @@ impl OhosWindow {
             ime_action: Cell::new(TextInputAction::Unspecified),
             ime_retry_generation: Cell::new(0),
             ime_recovery_pending: Cell::new(false),
-            ime_attachment: RefCell::new(None),
+            ime_retry_pending: Cell::new(false),
             pointer_position: Cell::new(None),
             pointer_screen_position: Cell::new(None),
             pressed_mouse_button: Cell::new(None),
@@ -1243,7 +1243,7 @@ impl OhosWindow {
     }
 
     fn show_keyboard_if_needed(&self) {
-        if !self.keyboard_visible.get() && self.ime_attachment.borrow().is_none() {
+        if !self.keyboard_visible.get() && !self.ime_retry_pending.get() {
             self.request_keyboard();
         }
     }
@@ -1260,92 +1260,54 @@ impl OhosWindow {
     }
 
     fn cancel_keyboard_retry(&self) {
-        self.ime_attachment.borrow_mut().take();
+        self.ime_retry_pending.set(false);
         self.ime_recovery_pending.set(false);
         self.ime_retry_generation
             .set(self.ime_retry_generation.get().wrapping_add(1));
     }
 
     fn request_keyboard_attempt(&self, attempt: usize, generation: u64, show_keyboard: bool) {
+        if self.ime_retry_generation.get() != generation
+            || self.released.get()
+            || self.closed.get()
+            || !self.active.get()
+            || !self.input_ready.get()
+            || !self.surface_focused.get()
+        {
+            return;
+        }
+        self.ime_retry_pending.set(false);
         if show_keyboard {
             self.apply_ime_action(false);
         }
-        let Some(window) = self
-            .window_index
-            .upgrade()
-            .and_then(|index| index.borrow().get(&self.window_id).cloned())
-        else {
-            return;
-        };
         let Some(app) = self.app.borrow().clone() else {
             return;
         };
-        let prepared = app
-            .with_ime_for(self.window_id, IME::prepare_background_attachment)
-            .map_err(|error| error.to_string())
-            .and_then(|result| result.map_err(|error| error.to_string()));
-        let (attachment, cancellation) = match prepared {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                self.finish_keyboard_attempt(attempt, generation, show_keyboard, Err(error));
-                return;
-            }
+        #[cfg(feature = "keyboard-text-input")]
+        if openharmony_ability::sdk_api_version() >= 26
+            && let Err(error) = app.with_ime_for(self.window_id, |ime| {
+                ime.set_consume_key_events(true);
+            })
+        {
+            self.finish_keyboard_attempt(
+                attempt,
+                generation,
+                show_keyboard,
+                Err(error.to_string()),
+            );
+            return;
+        }
+        let result = if show_keyboard {
+            app.try_show_keyboard_for(self.window_id)
+        } else {
+            app.try_attach_ime_for(self.window_id)
         };
-        *self.ime_attachment.borrow_mut() = Some(cancellation);
-        let (sender, connection) = futures::channel::oneshot::channel();
-        self.background_executor
-            .spawn(async move {
-                attachment.run(show_keyboard, |result| {
-                    if let Err(Err(error)) = sender.send(result.map_err(|error| error.to_string()))
-                    {
-                        log::debug!("Abandoned OHOS IME attachment failed: {error}");
-                    }
-                });
-            })
-            .detach();
-        self.foreground_executor
-            .spawn(async move {
-                let result = connection
-                    .await
-                    .unwrap_or_else(|error| Err(error.to_string()));
-                let Some(window) = window.upgrade() else {
-                    return;
-                };
-                let window = window.borrow();
-                if window.ime_retry_generation.get() != generation {
-                    return;
-                }
-                if window.released.get()
-                    || window.closed.get()
-                    || !window.active.get()
-                    || !window.input_ready.get()
-                    || !window.surface_focused.get()
-                {
-                    window.cancel_keyboard_retry();
-                    return;
-                }
-                let Some(cancellation) = window.ime_attachment.borrow_mut().take() else {
-                    return;
-                };
-                match result {
-                    Ok(true) if cancellation.commit() => {
-                        window.finish_keyboard_attempt(attempt, generation, show_keyboard, Ok(()));
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        // Stop this request before scheduling another, while retaining
-                        // the cached editor configuration and text for the retry.
-                        drop(cancellation);
-                        window.finish_keyboard_attempt(
-                            attempt,
-                            generation,
-                            show_keyboard,
-                            Err(error),
-                        );
-                    }
-                }
-            })
-            .detach();
+        self.finish_keyboard_attempt(
+            attempt,
+            generation,
+            show_keyboard,
+            result.map_err(|error| error.to_string()),
+        );
     }
 
     fn finish_keyboard_attempt(
@@ -1367,9 +1329,7 @@ impl OhosWindow {
                         self.window_id
                     );
                 }
-                // Edits made while attach held the native session guard only
-                // updated the cached snapshot. Publish that state once connected.
-                self.update_ime(true, IME::try_refresh_configuration);
+                self.apply_ime_action(true);
                 self.schedule_ime_text_update();
             }
             Err(error) => {
@@ -1394,6 +1354,7 @@ impl OhosWindow {
                 else {
                     return;
                 };
+                self.ime_retry_pending.set(true);
                 self.foreground_executor
                     .spawn(async move {
                         smol::Timer::after(Duration::from_millis(delay)).await;
@@ -1410,6 +1371,7 @@ impl OhosWindow {
                         {
                             return;
                         }
+                        window.ime_retry_pending.set(false);
                         let handler = window.input_handler.borrow_mut().take();
                         let Some(mut handler) = handler else {
                             return;
@@ -1550,12 +1512,19 @@ impl OhosWindow {
         }
     }
 
-    fn finish_native_keyboard_show(&self) {
-        // Native Show can arrive before the worker's IPC call returns. Keep
-        // cancellation available until that result passes the focus checks.
-        if self.ime_attachment.borrow().is_none() {
-            self.cancel_keyboard_retry();
+    fn detach_ime(&self) {
+        if let Some(app) = self.app.borrow().as_ref()
+            && let Err(error) = app.try_detach_ime_for(self.window_id)
+        {
+            warn!(
+                "Failed to detach OHOS IME for window {}: {error}",
+                self.window_id
+            );
         }
+    }
+
+    fn finish_native_keyboard_show(&self) {
+        self.cancel_keyboard_retry();
         self.keyboard_visible.set(true);
     }
 
@@ -2492,8 +2461,7 @@ impl OhosWindow {
         match event {
             Event::TextInputReadyChanged { window_id, ready } if *window_id == self.window_id => {
                 debug!("OhosWindow: native input ready={ready} for window {window_id}");
-                // Deferred teardown and replacement notifications can both observe
-                // a ready editor. The previous attachment still needs cancellation.
+                // A new editor lifetime invalidates retries for its predecessor.
                 self.input_ready.set(*ready);
                 self.cancel_keyboard_retry();
                 self.keyboard_visible.set(false);
@@ -2840,22 +2808,6 @@ impl OhosWindow {
     }
 
     pub(crate) fn handle_input_event(&self, event: &InputEvent) {
-        if let InputEvent::ArkUi(ArkUiInputEvent::Key(key_event)) = event {
-            let dispatched = self.key_state.borrow_mut().take_pre_ime_dispatch(key_event);
-            if let Some(consumed) = dispatched {
-                if consumed {
-                    key_event.response.consume();
-                }
-                return;
-            }
-        }
-        if let InputEvent::ArkUi(ArkUiInputEvent::Key(key_event)) = event
-            && self.key_state.borrow().key_was_recovered(key_event)
-        {
-            // A delayed reply must not activate a window after focus has moved.
-            key_event.response.consume();
-            return;
-        }
         let pointer_activation = match event {
             InputEvent::XComponent(XComponentInputEvent::Mouse(event)) => {
                 event.action == MouseAction::Press
@@ -2869,7 +2821,6 @@ impl OhosWindow {
             _ => false,
         };
         if pointer_activation {
-            self.key_state.borrow_mut().cancel_pending_ime_deletion();
             // A click on the already-active window produces no focus-change
             // event, but still supersedes activation of another pending window.
             self.cancel_other_activations();
@@ -2879,9 +2830,7 @@ impl OhosWindow {
                 InputEvent::XComponent(XComponentInputEvent::Key(event)) => {
                     event.action == KeyAction::Down
                 }
-                InputEvent::ArkUi(
-                    ArkUiInputEvent::Key(event) | ArkUiInputEvent::KeyPreIme(event),
-                ) => event.action == KeyAction::Down,
+                InputEvent::ArkUi(ArkUiInputEvent::Key(event)) => event.action == KeyAction::Down,
                 _ => false,
             };
         if activates_window && !self.active.get() {
@@ -2923,7 +2872,7 @@ impl OhosWindow {
                     // the editor underneath the menu instead of to ArkUI.
                     self.set_native_text_input_active(false);
                     self.hide_keyboard_if_needed();
-                    self.update_ime(false, IME::try_detach);
+                    self.detach_ime();
                     let change = self.key_state.borrow_mut().clear_pressed();
                     if let Some(change) = change {
                         self.dispatch_input(change);
@@ -2935,9 +2884,6 @@ impl OhosWindow {
                     return;
                 }
                 if !matches!(ime_event, ImeEvent::ImeStatusEvent(_)) {
-                    // A native edit has already applied the IME's interpretation.
-                    // Never replay those keys as commands after a late Escape.
-                    self.key_state.borrow_mut().cancel_pending_ime_escape();
                     // GPUI installs the focused input handler during paint. IME
                     // edits bypass dispatch_key_event's dirty-frame refresh, so
                     // complete it before borrowing the handler from the last frame.
@@ -3174,45 +3120,9 @@ impl OhosWindow {
                 }
             }
             InputEvent::ArkUi(ArkUiInputEvent::Key(key_event)) => {
-                let pending = self
-                    .key_state
-                    .borrow_mut()
-                    .take_keys_after_ime_escape(key_event);
                 let inputs = self.key_state.borrow_mut().handle_arkui(key_event);
                 for input in inputs {
-                    if self.dispatch_keyboard_input(input, true) {
-                        key_event.response.consume();
-                    }
-                }
-                if let Some(pending) = pending {
-                    self.restore_keys_after_ime_escape(pending);
-                }
-            }
-            InputEvent::ArkUi(ArkUiInputEvent::KeyPreIme(key_event)) => {
-                // A preceding key can stop accepting text before the next paint.
-                // Release its IME session before ArkUI forwards another key to it.
-                let was_deferred = self.defer_presentation.replace(true);
-                self.draw_requested_frame(Instant::now());
-                self.defer_presentation.set(was_deferred);
-                self.key_state.borrow_mut().record_pre_ime(key_event);
-                let change = self.key_state.borrow_mut().handle_arkui_state(key_event);
-                if let Some(change) = change {
-                    self.dispatch_input(change);
-                }
-                // The IME reserves Ctrl-Space, so offer application bindings first.
-                // Unmodified text and editing commands retain native IME precedence.
-                if self.key_state.borrow().is_pre_ime_shortcut(key_event) {
-                    let inputs = self.key_state.borrow_mut().handle_arkui(key_event);
-                    let mut consumed = false;
-                    for input in inputs {
-                        consumed |= self.dispatch_keyboard_input(input, false);
-                    }
-                    self.key_state
-                        .borrow_mut()
-                        .record_pre_ime_dispatch(key_event, consumed);
-                    if consumed {
-                        key_event.response.consume();
-                    }
+                    self.dispatch_keyboard_input(input, true);
                 }
             }
         }
@@ -3223,81 +3133,7 @@ impl OhosWindow {
             .set(self.edit_generation.get().wrapping_add(1));
     }
 
-    fn restore_keys_after_ime_escape(&self, pending: Vec<openharmony_ability::KeyboardEventData>) {
-        // The IME has declined Escape. Refresh the resulting mode before it can
-        // discard later keys when the native text session detaches.
-        let was_deferred = self.defer_presentation.replace(true);
-        self.draw_requested_frame(Instant::now());
-        self.defer_presentation.set(was_deferred);
-        for event in pending {
-            let accepts_text = {
-                let handler = self.input_handler.borrow_mut().take();
-                if let Some(mut handler) = handler {
-                    let accepts_text = handler.query_accepts_text_input();
-                    *self.input_handler.borrow_mut() = Some(handler);
-                    accepts_text
-                } else {
-                    true
-                }
-            };
-            if accepts_text || !self.surface_focused.get() {
-                break;
-            }
-            if self.key_state.borrow().key_was_recovered(&event) {
-                continue;
-            }
-            self.key_state.borrow_mut().record_recovered_key(&event);
-            let inputs = self.key_state.borrow_mut().handle_arkui(&event);
-            for input in inputs {
-                self.dispatch_keyboard_input(input, false);
-            }
-            let was_deferred = self.defer_presentation.replace(true);
-            self.draw_requested_frame(Instant::now());
-            self.defer_presentation.set(was_deferred);
-        }
-    }
-
-    fn dispatch_ime_deletion(&self, forward: bool) -> bool {
-        let event = self.key_state.borrow_mut().take_ime_deletion(forward);
-        let Some(event) = event else {
-            return false;
-        };
-        if self
-            .input_handler
-            .borrow_mut()
-            .as_mut()
-            .is_some_and(|handler| handler.marked_text_range().is_some())
-        {
-            return false;
-        }
-        // Popup-only composition has no marked range. Wait for the IME to forward
-        // deletion before restoring the physical key's editor command and modifiers.
-        let inputs = self.key_state.borrow_mut().handle_arkui(&event);
-        let mut consumed = false;
-        for input in inputs {
-            consumed |= self.dispatch_keyboard_input(input, false);
-        }
-        self.key_state
-            .borrow_mut()
-            .record_pre_ime_dispatch(&event, consumed);
-        consumed
-    }
-
     fn dispatch_ime_event(&self, ime_event: ImeEvent) {
-        match ime_event {
-            ImeEvent::BackspaceEvent(length) | ImeEvent::DeleteForwardEvent(length)
-                if length > 0 =>
-            {
-                if self.dispatch_ime_deletion(matches!(ime_event, ImeEvent::DeleteForwardEvent(_)))
-                {
-                    return;
-                }
-            }
-            ImeEvent::ImeStatusEvent(_) => {}
-            _ => {
-                self.key_state.borrow_mut().cancel_pending_ime_deletion();
-            }
-        }
         let handler_ref = &self.input_handler;
         let callbacks = &self.callbacks;
         if let ImeEvent::MoveCursorEvent(direction) = ime_event {
@@ -4628,7 +4464,7 @@ impl PlatformWindow for OhosWindow {
                 self.hide_keyboard_if_needed();
                 // Hiding the keyboard keeps the native editor attached. Vim command
                 // mode needs hardware keys to reach GPUI instead of that IME session.
-                self.update_ime(false, IME::try_detach);
+                self.detach_ime();
             }
             TextInputStateChange::SelectionChanged | TextInputStateChange::ContentChanged => {
                 self.invalidate_pending_edit();
