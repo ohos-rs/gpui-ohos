@@ -290,14 +290,14 @@ impl TouchScroll {
         };
         // The press must reach title-bar controls before a native move starts,
         // so their ordinary stop-propagation/default handling still applies.
-        emit(PlatformInput::MouseDown(MouseDownEvent {
+        let result = emit(PlatformInput::MouseDown(MouseDownEvent {
             button: MouseButton::Left,
             position: contact.start,
             modifiers: Modifiers::default(),
             click_count,
             first_mouse: false,
         }));
-        true
+        result.propagate && !result.default_prevented
     }
 
     pub(crate) fn cancel_window_control_click(&mut self) {
@@ -557,6 +557,13 @@ fn scroll(position: Point<Pixels>, delta: Point<Pixels>, touch_phase: TouchPhase
 mod tests {
     use super::*;
 
+    fn unconsumed() -> DispatchEventResult {
+        DispatchEventResult {
+            propagate: true,
+            default_prevented: false,
+        }
+    }
+
     #[test]
     fn window_control_press_precedes_movement_and_pan_does_not_scroll() {
         let mut scroll = TouchScroll::default();
@@ -565,7 +572,7 @@ mod tests {
         let mut presses = Vec::new();
         assert!(scroll.capture_window_control(TouchId(1), now, |event| {
             presses.push(event);
-            DispatchEventResult::default()
+            unconsumed()
         }));
         assert!(
             matches!(presses.as_slice(), [PlatformInput::MouseDown(event)] if event.position == point(px(20.), px(10.)))
@@ -606,7 +613,7 @@ mod tests {
                 assert!(
                     matches!(event, PlatformInput::MouseDown(event) if event.click_count == count)
                 );
-                DispatchEventResult::default()
+                unconsumed()
             }));
             let (tapped, released) = raw(&mut scroll, TouchPhase::Ended, now, 20., 10.);
             assert!(tapped);
@@ -617,11 +624,29 @@ mod tests {
     }
 
     #[test]
+    fn window_control_child_press_completes_tap_without_starting_move() {
+        let mut scroll = TouchScroll::default();
+        let now = Instant::now();
+        raw(&mut scroll, TouchPhase::Started, now, 20., 10.);
+        assert!(!scroll.capture_window_control(TouchId(1), now, |_| {
+            DispatchEventResult {
+                propagate: false,
+                default_prevented: false,
+            }
+        }));
+        let (tapped, released) = raw(&mut scroll, TouchPhase::Ended, now, 20., 10.);
+        assert!(tapped);
+        assert!(
+            matches!(released.as_slice(), [PlatformInput::MouseUp(event), PlatformInput::Touch(_)] if event.position == point(px(20.), px(10.)))
+        );
+    }
+
+    #[test]
     fn moving_window_cancels_click_even_when_local_touch_position_is_unchanged() {
         let mut scroll = TouchScroll::default();
         let now = Instant::now();
         raw(&mut scroll, TouchPhase::Started, now, 20., 10.);
-        assert!(scroll.capture_window_control(TouchId(1), now, |_| DispatchEventResult::default()));
+        assert!(scroll.capture_window_control(TouchId(1), now, |_| unconsumed()));
         scroll.cancel_window_control_click();
         let (tapped, released) = raw(&mut scroll, TouchPhase::Ended, now, 20., 10.);
         assert!(!tapped);
@@ -637,7 +662,7 @@ mod tests {
         let now = Instant::now();
         raw(&mut scroll, TouchPhase::Started, now, 20., 10.);
         assert!(!scroll.capture_window_control(TouchId(2), now, |_| panic!("secondary press")));
-        assert!(scroll.capture_window_control(TouchId(1), now, |_| DispatchEventResult::default()));
+        assert!(scroll.capture_window_control(TouchId(1), now, |_| unconsumed()));
         scroll.relay(touch(2, TouchPhase::Started, 50., 50.), now, |_| {
             panic!("secondary contact")
         });
@@ -654,7 +679,7 @@ mod tests {
         );
         assert!(scroll.contact.is_none());
         raw(&mut scroll, TouchPhase::Started, now, 20., 10.);
-        assert!(scroll.capture_window_control(TouchId(1), now, |_| DispatchEventResult::default()));
+        assert!(scroll.capture_window_control(TouchId(1), now, |_| unconsumed()));
     }
 
     #[test]
