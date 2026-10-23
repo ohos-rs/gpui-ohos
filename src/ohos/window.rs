@@ -1283,7 +1283,7 @@ impl OhosWindow {
         let Some(app) = self.app.borrow().clone() else {
             return;
         };
-        #[cfg(feature = "keyboard-text-input")]
+        #[cfg(feature = "api-26")]
         if openharmony_ability::sdk_api_version() >= 26
             && let Err(error) = app.with_ime_for(self.window_id, |ime| {
                 ime.set_consume_key_events(true);
@@ -2978,7 +2978,7 @@ impl OhosWindow {
                             && button == MouseButton::Left
                             && matches!(self.hit_window_control(), Some(WindowControlArea::Drag))
                         {
-                            self.begin_manipulation(None);
+                            self.start_window_move();
                         }
                     }
                     MouseAction::Release => {
@@ -3120,9 +3120,14 @@ impl OhosWindow {
                 }
             }
             InputEvent::ArkUi(ArkUiInputEvent::Key(key_event)) => {
+                let response = key_event.response.clone();
                 let inputs = self.key_state.borrow_mut().handle_arkui(key_event);
+                let mut consumed = false;
                 for input in inputs {
-                    self.dispatch_keyboard_input(input, true);
+                    consumed |= self.dispatch_keyboard_input(input, true);
+                }
+                if consumed {
+                    response.consume();
                 }
             }
         }

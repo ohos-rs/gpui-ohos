@@ -620,12 +620,6 @@ impl OhosPlatform {
         {
             warn!("Using raw OHOS keyboard input: {error}");
         }
-        #[cfg(feature = "keyboard-focus-recovery")]
-        if openharmony_ability::sdk_api_version() >= 26
-            && let Err(error) = app.set_window_keyboard_focus_recovery(true)
-        {
-            warn!("Failed to configure OHOS activation key focus recovery: {error}");
-        }
         if let Err(error) = app.register_plugin(AppControlBridgePlugin) {
             warn!("Failed to register OpenHarmony app-control plugin: {error}");
         }
