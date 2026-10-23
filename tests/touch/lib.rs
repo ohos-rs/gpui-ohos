@@ -198,6 +198,10 @@ pub mod xcomponent {
 }
 
 #[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub struct KeyboardEventResponse;
+
+#[cfg(test)]
 pub struct KeyboardEventData {
     pub code: xcomponent::KeyCode,
     pub action: xcomponent::Action,
@@ -209,6 +213,7 @@ pub struct KeyboardEventData {
     pub caps_lock: Option<bool>,
     pub num_lock: Option<bool>,
     pub ime_consumed: bool,
+    pub response: KeyboardEventResponse,
 }
 use std::sync::{
     Arc,

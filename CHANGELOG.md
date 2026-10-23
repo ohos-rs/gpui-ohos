@@ -44,10 +44,9 @@
   disposition. Remove pre/post-IME receipts, timestamp deduplication, Escape
   replay, the Ctrl-Space interception policy and input-callback foreground-task
   pumping. IME attachment transfer now uses Ability's UI-thread owner APIs.
-- Add opt-in API-26 `keyboard-text-input` and `keyboard-focus-recovery` features;
-  the example enables them. Native key consumption is configured explicitly
-  before attachment. Linked API-26 symbols may raise the application's minimum
-  runtime requirement.
+- Add opt-in `api-19` and `api-26` features; the example enables `api-26`.
+  Native key consumption is configured explicitly before attachment. Linked
+  API-19/API-26 symbols may raise the application's minimum runtime requirement.
 - File grant persistence is now disabled by default, including through
   `current_platform`. Applications that need cross-restart file access must use
   `try_current_platform` with `PlatformOptions::persist_file_access = true` and
@@ -93,7 +92,7 @@
   partial provider, activation and storage failures.
 - Remove Rust dependencies into `example/` and align Rust/HAR source to the
   explicitly authorized combined Ability #98 revision
-  `a4cfea0ea820b9149997a296744057ea080fbe52` (with `ohos-native-bindings` unified
+  `0e41a3141d1053e9a5172738538d725b050e2d36` (with `ohos-native-bindings` unified
   at `43aec6c125503a47f7e875c793aaf2462e91ad19`). Ability #93-#98 and GPUI core #3
   remain unmerged release blockers.
 

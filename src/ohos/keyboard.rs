@@ -380,6 +380,7 @@ mod tests {
             caps_lock: Some(false),
             num_lock: Some(true),
             ime_consumed: false,
+            response: Default::default(),
         }
     }
 
