@@ -24,6 +24,7 @@ pub enum FrameInputDelivery {
 pub(crate) struct FrameState {
     #[cfg(feature = "audio")]
     pub(crate) audio: crate::audio_support::AudioState,
+    pub(crate) clipboard: std::sync::Arc<crate::clipboard_support::NativeClipboard>,
     pub(crate) delivery_window: Cell<i64>,
     pub(crate) xcomponent: Cell<bool>,
     pub(crate) callback_active: Rc<Cell<bool>>,
@@ -46,6 +47,23 @@ pub(crate) struct FrameState {
 pub struct OpenHarmonyApp(pub(crate) Rc<FrameState>);
 
 impl OpenHarmonyApp {
+    pub fn registered_plugin<P: std::any::Any + Send + Sync>(
+        &self,
+    ) -> crate::Result<Option<std::sync::Arc<P>>> {
+        #[cfg(feature = "audio")]
+        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<crate::AudioBridgePlugin>() {
+            let Some(()) = self.0.audio.is_registered() else {
+                return Ok(None);
+            };
+            let plugin: std::sync::Arc<dyn std::any::Any + Send + Sync> =
+                std::sync::Arc::new(crate::AudioBridgePlugin);
+            return Ok(plugin.downcast::<P>().ok());
+        }
+        let plugin: std::sync::Arc<dyn std::any::Any + Send + Sync> =
+            std::sync::Arc::new(crate::ClipboardBridgePlugin(self.0.clipboard.clone()));
+        Ok(plugin.downcast::<P>().ok())
+    }
+
     pub fn set_frame_input_delivery_for(
         &self,
         window_id: i64,

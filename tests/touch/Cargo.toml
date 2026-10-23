@@ -8,11 +8,11 @@ publish = false
 
 [features]
 native-vsync = []
-audio = ["dep:futures"]
+audio = []
 native-input = []
 
 [dependencies]
-gpui = { git = "https://github.com/ohos-rs/zed", rev = "422c92ace17512aa5ea66f73dc14044008d3e87d", default-features = false }
+gpui = { git = "https://github.com/ohos-rs/zed", rev = "00542402c992e7a041f110c7d2386c60a40b7038", default-features = false }
 rustc-hash = "2"
 log = "0.4"
 libc = "0.2"
@@ -20,7 +20,9 @@ anyhow = "1"
 parking_lot = "0.12"
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
-futures = { version = "0.3", optional = true }
+futures = "0.3"
+smallvec = "1"
+image = { version = "0.25", default-features = false }
 
 [lib]
 path = "lib.rs"

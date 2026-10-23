@@ -2,7 +2,6 @@
 use crate::{Error, OpenHarmonyApp};
 use futures::channel::oneshot;
 use std::{
-    any::TypeId,
     cell::{Cell, RefCell},
     collections::VecDeque,
     os::fd::{AsRawFd, BorrowedFd},
@@ -13,6 +12,17 @@ pub struct AudioBridgePlugin;
 #[derive(Debug)]
 pub struct AudioUpdateRequest {
     pub player: String,
+    pub replace: bool,
+    pub release: bool,
+    pub play: bool,
+    pub volume: f64,
+    pub report_errors: bool,
+    pub label: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct RecordedAudioUpdate {
+    pub player: String,
     pub source_fd: Option<i32>,
     pub replace: bool,
     pub release: bool,
@@ -20,20 +30,18 @@ pub struct AudioUpdateRequest {
     pub volume: f64,
     pub report_errors: bool,
     pub label: String,
-    pub diagnostics: bool,
 }
 
 #[derive(Default)]
 pub(crate) struct AudioState {
     registered: Cell<bool>,
-    requests: RefCell<Vec<AudioUpdateRequest>>,
+    requests: RefCell<Vec<RecordedAudioUpdate>>,
     acknowledgements: RefCell<VecDeque<oneshot::Sender<()>>>,
 }
 
-impl OpenHarmonyApp {
-    pub fn registered_plugin<P: 'static>(&self) -> crate::Result<Option<()>> {
-        assert_eq!(TypeId::of::<P>(), TypeId::of::<AudioBridgePlugin>());
-        Ok(self.0.audio.registered.get().then_some(()))
+impl AudioState {
+    pub(crate) fn is_registered(&self) -> Option<()> {
+        self.registered.get().then_some(())
     }
 }
 
@@ -46,11 +54,20 @@ impl AudioClient {
 
     pub async fn update(
         &self,
-        mut request: AudioUpdateRequest,
+        request: AudioUpdateRequest,
         source: Option<BorrowedFd<'_>>,
     ) -> crate::Result<()> {
-        request.source_fd = source.map(|fd| fd.as_raw_fd());
-        self.0.0.audio.requests.borrow_mut().push(request);
+        let recorded = RecordedAudioUpdate {
+            player: request.player,
+            source_fd: source.map(|fd| fd.as_raw_fd()),
+            replace: request.replace,
+            release: request.release,
+            play: request.play,
+            volume: request.volume,
+            report_errors: request.report_errors,
+            label: request.label,
+        };
+        self.0.0.audio.requests.borrow_mut().push(recorded);
         let (ack, pending) = oneshot::channel();
         self.0.0.audio.acknowledgements.borrow_mut().push_back(ack);
         pending.await.map_err(|_| Error)
@@ -171,9 +188,7 @@ mod tests {
             let requests = driver.app.0.audio.requests.borrow();
             let replace = &requests[0];
             assert!(replace.source_fd.is_some());
-            assert!(
-                replace.replace && replace.play && replace.report_errors && replace.diagnostics
-            );
+            assert!(replace.replace && replace.play && replace.report_errors);
             assert_eq!(replace.label, "bell");
             assert_eq!(replace.volume, 0.5);
         }

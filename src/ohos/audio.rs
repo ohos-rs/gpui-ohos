@@ -40,7 +40,7 @@ impl NativeAudioService {
     }
     pub fn player(
         &self,
-        options: NativeAudioPlayerOptions,
+        _options: NativeAudioPlayerOptions,
     ) -> Result<NativeAudioPlayer, NativeAudioError> {
         let client = AudioClient::new(&self.app).map_err(|_| NativeAudioError::Unavailable)?;
         let id = NEXT_PLAYER
@@ -54,14 +54,12 @@ impl NativeAudioService {
                 while let Some(command) = receiver.next().await {
                     let request = AudioUpdateRequest {
                         player: player_id.clone(),
-                        source_fd: None,
                         replace: command.replace,
                         release: command.release,
                         play: command.play,
                         volume: command.volume,
                         report_errors: command.report_errors,
                         label: command.label,
-                        diagnostics: options.diagnostics,
                     };
                     if let Err(error) = client
                         .update(request, command.source.as_ref().map(AsFd::as_fd))

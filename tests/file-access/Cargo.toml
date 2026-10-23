@@ -1,0 +1,17 @@
+[package]
+name = "ohos-file-access-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+parking_lot = "0.12"
+serde = "1"
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[lib]
+path = "lib.rs"
