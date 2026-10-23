@@ -34,15 +34,15 @@ napi-ohos = "=1.2.0"
 napi-derive-ohos = "=1.2.0"
 # GPUI uses owned ArkUI key events, mouse cancellation, and native file drag/drop on every backend.
 # Coherent D3/D4 source contract; upstream Ability/binding releases remain blockers.
-openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3", features = ["keyboard", "mouse", "drag"] }
-openharmony-ability-plugin-menu = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-notification = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-system-state = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-app-control = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-clipboard = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3", features = ["api-18"] }
-openharmony-ability-plugin-files = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-url = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-window = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
+openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "0e41a3141d1053e9a5172738538d725b050e2d36", version = "=1.0.0-beta.3", features = ["keyboard", "mouse", "drag"] }
+openharmony-ability-plugin-menu = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "0e41a3141d1053e9a5172738538d725b050e2d36", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-notification = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "0e41a3141d1053e9a5172738538d725b050e2d36", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-system-state = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "0e41a3141d1053e9a5172738538d725b050e2d36", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-app-control = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "0e41a3141d1053e9a5172738538d725b050e2d36", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-clipboard = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "0e41a3141d1053e9a5172738538d725b050e2d36", version = "=1.0.0-beta.3", features = ["api-18"] }
+openharmony-ability-plugin-files = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "0e41a3141d1053e9a5172738538d725b050e2d36", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-url = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "0e41a3141d1053e9a5172738538d725b050e2d36", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-window = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "0e41a3141d1053e9a5172738538d725b050e2d36", version = "=1.0.0-beta.3" }
 parking_lot = "0.12.1"
 profiling = "1"
 serde = { version = "1", features = ["derive"] }
@@ -73,8 +73,8 @@ vulkan = ["wgpu/vulkan"]
 native-vsync = ["dep:ohos-vsync-binding"]
 grid = ["dep:harfrust"]
 native-input = []
-keyboard-text-input = ["openharmony-ability/keyboard-text-input"]
-keyboard-focus-recovery = ["openharmony-ability/keyboard-focus-recovery"]
+api-19 = ["openharmony-ability/api-19"]
+api-26 = ["api-19", "openharmony-ability/api-26"]
 
 [lib]
 name = "gpui_ohos"
