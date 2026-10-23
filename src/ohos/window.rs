@@ -15,7 +15,9 @@ use ohos_accessibility_binding::Provider;
 use openharmony_ability::{
     ArkUiInputEvent, AvoidAreaType, Event, ImeEvent, InputEvent, OpenHarmonyApp, PointerInputData,
     XComponentInputEvent,
-    arkui::arkui_input_binding::{UIInputAction, UIInputSourceType, UIInputToolType},
+    arkui::arkui_input_binding::{
+        UIInputAction, UIInputEvent, UIInputSourceType, UIInputToolType,
+    },
     arkui::component::attribute::{ArkUIAttributeBasic, ArkUICommonAttribute},
     ime::{
         Action as ImeAction, Direction as ImeDirection, EnterKey, IME, ImeResult, InputType,
@@ -23,7 +25,7 @@ use openharmony_ability::{
     },
     xcomponent::{
         Action as KeyAction, MouseAction, MouseButton as OhosMouseButton,
-        TouchEvent as OhosTouchEvent, TouchEventData, TouchPointData,
+        TouchEvent as OhosTouchEvent, TouchEventData, TouchPointData, TouchPointTool,
     },
 };
 use openharmony_ability_plugin_menu::{
@@ -985,9 +987,7 @@ impl OhosWindow {
             };
             id
         };
-        if self.primary_touch.get() == Some(raw_id)
-            && !matches!(phase, TouchPhase::Started | TouchPhase::Cancelled)
-        {
+        if self.primary_touch.get() == Some(raw_id) && phase == TouchPhase::Moved {
             self.record_screen_pointer(screen_position.0, screen_position.1);
         }
         self.pointer_position.set(Some(position));
@@ -1047,10 +1047,12 @@ impl OhosWindow {
         if phase == TouchPhase::Started
             && self.primary_touch.get() == Some(raw_id)
             && matches!(self.hit_window_control(), Some(WindowControlArea::Drag))
-        {
-            self.touch_scroll
+            && self
+                .touch_scroll
                 .borrow_mut()
-                .capture_window_control(id, now, |input| self.dispatch_input(input));
+                .capture_window_control(id, now, |input| self.dispatch_input(input))
+        {
+            self.start_window_move();
         }
         self.update_touch_long_press_timer();
         self.request_touch_momentum_frame();
@@ -1136,6 +1138,9 @@ impl OhosWindow {
     }
 
     fn dispatch_raw_touch_data(&self, event: &TouchEventData, point: &TouchPointData) {
+        if point.event_tool_type == TouchPointTool::Mouse {
+            return;
+        }
         let phase = match event.event_type {
             OhosTouchEvent::Down => TouchPhase::Started,
             OhosTouchEvent::Move => TouchPhase::Moved,
@@ -1154,6 +1159,14 @@ impl OhosWindow {
     }
 
     fn dispatch_raw_touch_event(&self, event: &TouchEventData) {
+        if !event.touch_points.is_empty()
+            && event
+                .touch_points
+                .iter()
+                .all(|point| point.event_tool_type == TouchPointTool::Mouse)
+        {
+            return;
+        }
         match event.event_type {
             OhosTouchEvent::Move | OhosTouchEvent::Cancel if !event.touch_points.is_empty() => {
                 for point in &event.touch_points {
@@ -3057,6 +3070,12 @@ impl OhosWindow {
                 self.set_hovered(*hovered);
             }
             InputEvent::ArkUi(ArkUiInputEvent::Pointer(pointer)) => {
+                if pointer.event_type == UIInputEvent::Touch
+                    && (pointer.source_type == UIInputSourceType::Mouse
+                        || pointer.tool_type == UIInputToolType::Mouse)
+                {
+                    return;
+                }
                 if let Some(id) = pointer.pointer_id {
                     self.native_pointer_id.set(Some(id));
                 }
@@ -3102,6 +3121,11 @@ impl OhosWindow {
             InputEvent::ArkUi(ArkUiInputEvent::Gesture(
                 openharmony_ability::GestureEvent::Pan(pan),
             )) => {
+                if pan.pointer.source_type == UIInputSourceType::Mouse
+                    || pan.pointer.tool_type == UIInputToolType::Mouse
+                {
+                    return;
+                }
                 let phase = match pan.phase {
                     openharmony_ability::GesturePhase::Start => TouchPhase::Started,
                     openharmony_ability::GesturePhase::Update => TouchPhase::Moved,
