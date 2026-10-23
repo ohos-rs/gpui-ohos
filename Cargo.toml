@@ -1,6 +1,7 @@
 [workspace]
-members = []
-exclude = ["example", "tests/touch", "tests/text", "example/ohos/vendor/openharmony-ability", "example/ohos/vendor/openharmony-ability/crates/*"]
+members = ["tests/text"]
+default-members = ["."]
+exclude = ["example", "tests/touch", "example/ohos/vendor/openharmony-ability", "example/ohos/vendor/openharmony-ability/crates/*"]
 resolver = "2"
 
 [workspace.package]
@@ -20,7 +21,7 @@ unicode-segmentation = "1.12"
 etagere = "0.2"
 font-kit = { package = "zed-font-kit", version = "0.14.1-zed", git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", features = ["source-fontconfig-dlopen"] }
 futures = "0.3.34"
-gpui = { git = "https://github.com/ohos-rs/zed", rev = "422c92ace17512aa5ea66f73dc14044008d3e87d", default-features = false }
+gpui = { git = "https://github.com/ohos-rs/zed", rev = "00542402c992e7a041f110c7d2386c60a40b7038", default-features = false }
 itertools = "0.14.0"
 image = { version = "0.25.1", default-features = false }
 log = "0.4"
@@ -32,15 +33,16 @@ ohos-vsync-binding = { version = "0.3.1", default-features = false, features = [
 napi-ohos = "=1.2.0"
 napi-derive-ohos = "=1.2.0"
 # GPUI uses owned ArkUI key events, mouse cancellation, and native file drag/drop on every backend.
-openharmony-ability = { path = "example/ohos/vendor/openharmony-ability/crates/ability", version = "=1.0.0-beta.3", features = ["keyboard", "mouse", "drag"] }
-openharmony-ability-plugin-menu = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-menu", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-notification = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-notification", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-system-state = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-system-state", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-app-control = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-app-control", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-clipboard = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-clipboard", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-files = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-files", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-url = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-url", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-window = { path = "example/ohos/vendor/openharmony-ability/crates/plugin-window", version = "=1.0.0-beta.3" }
+# Coherent D3/D4 source contract; upstream Ability/binding releases remain blockers.
+openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3", features = ["keyboard", "mouse", "drag"] }
+openharmony-ability-plugin-menu = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-notification = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-system-state = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-app-control = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-clipboard = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3", features = ["api-18"] }
+openharmony-ability-plugin-files = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-url = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-window = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "a4cfea0ea820b9149997a296744057ea080fbe52", version = "=1.0.0-beta.3" }
 parking_lot = "0.12.1"
 profiling = "1"
 serde = { version = "1", features = ["derive"] }
@@ -69,7 +71,10 @@ default = ["gles"]
 gles = ["wgpu/gles"]
 vulkan = ["wgpu/vulkan"]
 native-vsync = ["dep:ohos-vsync-binding"]
+grid = ["dep:harfrust"]
 native-input = []
+keyboard-text-input = ["openharmony-ability/keyboard-text-input"]
+keyboard-focus-recovery = ["openharmony-ability/keyboard-focus-recovery"]
 
 [lib]
 name = "gpui_ohos"
@@ -81,7 +86,7 @@ gpui.workspace = true
 anyhow.workspace = true
 bytemuck.workspace = true
 cosmic-text.workspace = true
-harfrust.workspace = true
+harfrust = { workspace = true, optional = true }
 swash.workspace = true
 unicode-segmentation.workspace = true
 etagere.workspace = true

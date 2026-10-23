@@ -36,7 +36,7 @@ impl CapabilitiesDemo {
                 }),
                 ClipboardEntry::String(ClipboardString {
                     text: "beta\n".into(),
-                    metadata: Some(String::new()),
+                    metadata: Some("{\"line\":8}".into()),
                 }),
                 ClipboardEntry::Image(Image::from_bytes(
                     ImageFormat::Png,
@@ -75,7 +75,11 @@ impl Render for CapabilitiesDemo {
                         cx.spawn(async move |this, cx| {
                             let permission = app.request_permission("ohos.permission.READ_PASTEBOARD").await;
                             if !matches!(permission, Ok(ref values) if values.iter().all(|value| value.code == 0)) {
-                                log::info!("GPUI clipboard permission is unavailable; testing only this application's own write: {permission:?}");
+                                let _ = this.update(cx, |this, cx| {
+                                    this.status = format!("clipboard permission unavailable: {permission:?}");
+                                    log::warn!("GPUI native capabilities: {}", this.status); cx.notify();
+                                });
+                                return;
                             }
                             let Ok(read) = this.update(cx, |_, cx| { cx.write_to_clipboard(expected); cx.read_from_clipboard_async() }) else { return; };
                             let result = read.await;
@@ -83,10 +87,7 @@ impl Render for CapabilitiesDemo {
                                 this.status = match result {
                                     Ok(Some(item)) => {
                                         let expected = this.mixed_item();
-                                        let valid = item.entries.len() == 4
-                                            && item.entries[..2] == expected.entries[..2]
-                                            && matches!(item.entries[2], ClipboardEntry::Image(ref image) if !image.bytes.is_empty())
-                                            && item.entries[3] == expected.entries[3];
+                                        let valid = item.entries == expected.entries;
                                         format!("mixed clipboard {} ({} records)", if valid { "passed" } else { "FAILED" }, item.entries.len())
                                     }
                                     other => format!("clipboard: {other:?}"),
@@ -97,10 +98,23 @@ impl Render for CapabilitiesDemo {
                     })))
                 .child(div().id("read-native-clipboard").p_2().bg(rgb(0x2dd4bf)).child("Read clipboard")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        let cached = cx.read_from_clipboard().map_or(0, |item| item.entries.len());
-                        let read = cx.read_from_clipboard_async();
-                        this.status = "reading native clipboard".into(); cx.notify();
+                        let app = this.app.clone();
+                        this.status = "clipboard permission".into(); cx.notify();
                         cx.spawn(async move |this, cx| {
+                            let permission = app.request_permission("ohos.permission.READ_PASTEBOARD").await;
+                            if !matches!(permission, Ok(ref values) if values.iter().all(|value| value.code == 0)) {
+                                let _ = this.update(cx, |this, cx| {
+                                    this.status = format!("clipboard permission unavailable: {permission:?}");
+                                    log::warn!("GPUI native capabilities: {}", this.status); cx.notify();
+                                });
+                                return;
+                            }
+                            let Ok((cached, read)) = this.update(cx, |this, cx| {
+                                let cached = cx.read_from_clipboard().map_or(0, |item| item.entries.len());
+                                let read = cx.read_from_clipboard_async();
+                                this.status = "reading native clipboard".into(); cx.notify();
+                                (cached, read)
+                            }) else { return; };
                             let result = read.await;
                             let _ = this.update(cx, |this, cx| {
                                 this.status = match result {
