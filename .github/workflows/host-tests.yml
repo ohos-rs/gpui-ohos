@@ -1,0 +1,24 @@
+name: Host tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  file-access:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --manifest-path tests/file-access/Cargo.toml
+  input-and-lifecycle:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update -qq && sudo apt-get install -y libasound2-dev libfontconfig1-dev libwayland-dev libxkbcommon-dev
+      - run: cargo test --manifest-path tests/touch/Cargo.toml
+      - run: cargo test --manifest-path tests/touch/Cargo.toml --features native-vsync

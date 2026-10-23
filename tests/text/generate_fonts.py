@@ -1,5 +1,6 @@
 """Regenerate tiny, original test fonts with fonttools 4.60.1 (not a runtime dependency)."""
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
 
 from fontTools.fontBuilder import FontBuilder
@@ -52,8 +53,8 @@ def write_font(directory, filename, family, width, fallback=False, bold=False):
 
 
 if __name__ == "__main__":
-    directory = Path(__file__).resolve().parent / "fonts"
-    directory.mkdir(exist_ok=True)
+    directory = Path(sys.argv[1])
+    directory.mkdir(parents=True, exist_ok=True)
     write_font(directory, "primary.ttf", "Parity Primary", 500)
     write_font(directory, "primary-bold.ttf", "Parity Primary", 600, bold=True)
     write_font(directory, "first.ttf", "Parity First", 700, fallback=True)

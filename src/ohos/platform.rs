@@ -12,9 +12,8 @@ use std::{
 use anyhow::{Context as _, Result};
 use futures::channel::oneshot;
 use openharmony_ability::{
-    ArkUiInputEvent, ColorMode, Event, InputEvent, OpenHarmonyApp, TouchInputDelivery,
-    WindowCreateParams, XComponentInputEvent, create_os_window, drain_pending_window_closes,
-    drain_pending_window_status,
+    ColorMode, Event, OpenHarmonyApp, TouchInputDelivery, WindowCreateParams, create_os_window,
+    drain_pending_window_closes, drain_pending_window_status,
 };
 use openharmony_ability_plugin_app_control::{
     AppControlBridgePlugin, RestartRequest, RestartResponse, SetColorModeRequest,
@@ -333,7 +332,7 @@ fn menu_items(
                 text,
                 enabled,
                 accelerator,
-                accelerator_display_only: None,
+                accelerator_display_only: Some(true),
                 // Keep the application's action dispatch while allowing ArkUI to
                 // acquire clipboard permission through its native paste control.
                 predefined_type: matches!(
@@ -433,7 +432,10 @@ impl OhosPlatform {
             }
         });
 
-        let file_access = Arc::new(super::file_access::FileAccess::new(app.base_path()));
+        let file_access = Arc::new(super::file_access::FileAccess::new(
+            app.base_path(),
+            options.persist_file_access,
+        ));
         let gpu_context = Arc::new(OnceLock::new());
         // EGL initialization can block in the emulator driver for several seconds.
         // WGPU owns this context and releases its thread binding between operations;
@@ -444,13 +446,7 @@ impl OhosPlatform {
                 .spawn({
                     let gpu_context = gpu_context.clone();
                     let dispatcher = dispatcher.clone();
-                    let file_access = file_access.clone();
                     move || {
-                        // Restored workspaces must regain their selected paths before the
-                        // launch callback starts filesystem reads. Keep the native IPC off UI.
-                        if let Err(error) = file_access.restore() {
-                            warn!("Failed to restore OHOS file access: {error:#}");
-                        }
                         let result = match std::panic::catch_unwind(WgpuContext::new) {
                             Ok(result) => {
                                 result.map(Arc::new).map_err(|error| format!("{error:#}"))
@@ -473,8 +469,11 @@ impl OhosPlatform {
         );
 
         let app_slot = Rc::new(RefCell::new(None));
-        let clipboard =
-            super::clipboard::OhosClipboard::new(app_slot.clone(), foreground_executor.clone());
+        let clipboard = super::clipboard::OhosClipboard::new(
+            app_slot.clone(),
+            foreground_executor.clone(),
+            background_executor.clone(),
+        );
         let platform = Self {
             app: app_slot,
             dispatcher,
@@ -616,12 +615,15 @@ impl OhosPlatform {
         if let Err(error) = app.set_touch_input_delivery(TouchInputDelivery::Both) {
             warn!("Failed to configure system pan and raw control input for GPUI: {error}");
         }
-        if let Err(error) = app.set_keyboard_input_delivery(
-            openharmony_ability::KeyboardInputDelivery::ArkUiWithTextInput,
-        ) {
+        if let Err(error) =
+            app.set_keyboard_input_delivery(openharmony_ability::KeyboardInputDelivery::ArkUi)
+        {
             warn!("Using raw OHOS keyboard input: {error}");
         }
-        if let Err(error) = app.set_window_keyboard_focus_recovery(true) {
+        #[cfg(feature = "keyboard-focus-recovery")]
+        if openharmony_ability::sdk_api_version() >= 26
+            && let Err(error) = app.set_window_keyboard_focus_recovery(true)
+        {
             warn!("Failed to configure OHOS activation key focus recovery: {error}");
         }
         if let Err(error) = app.register_plugin(AppControlBridgePlugin) {
@@ -653,7 +655,7 @@ impl OhosPlatform {
         self.dispatcher.set_waker(app.create_waker());
     }
 
-    fn run_foreground_tasks(&self) {
+    fn handle_foreground_wake(&self) {
         self.dispatcher.begin_main_turn();
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2);
         for _ in 0..64 {
@@ -1270,6 +1272,7 @@ impl OhosPlatform {
                     buttons: vec!["Close".into()],
                     cancel_index: Some(0),
                     anchor: None,
+                    appearance: None,
                 })
                 .await?;
             Ok::<(), anyhow::Error>(())
@@ -1318,16 +1321,6 @@ impl OhosPlatform {
             _ => None,
         };
         if let Some((id, input)) = input {
-            // Opening an editor or terminal can finish in a foreground task. Native
-            // keyboard callbacks may arrive ahead of its queued event-loop wakeup.
-            if matches!(
-                input,
-                InputEvent::Ime(_)
-                    | InputEvent::XComponent(XComponentInputEvent::Key(_))
-                    | InputEvent::ArkUi(ArkUiInputEvent::Key(_) | ArkUiInputEvent::KeyPreIme(_))
-            ) {
-                self.run_foreground_tasks();
-            }
             let window = self.window_index.borrow().get(&id).and_then(Weak::upgrade);
             if let Some(window) = window {
                 self.cursor_window_id.set(id);
@@ -1398,18 +1391,11 @@ impl OhosPlatform {
             self.pending_open_uris.borrow_mut().push_back(uri.clone());
             self.dispatch_open_uris();
         }
-        // create_waker() snapshots the lifecycle's current ThreadsafeFunction. Refresh it once
-        // the surface exists so timers scheduled during early startup can reliably wake the UI
-        // thread even if the first snapshot was taken before lifecycle initialization finished.
-        if matches!(event, Event::SurfaceCreate)
-            && let Some(app) = self.app.borrow().as_ref()
-        {
-            self.dispatcher.set_waker(app.create_waker());
+        // Ability orders input and executor wakes in one FIFO. Only a wake turn
+        // may run queued futures; doing so inside input would overtake that FIFO.
+        if matches!(event, Event::UserEvent) {
+            self.handle_foreground_wake();
         }
-
-        // First, process any GPUI tasks queued for the main thread
-        // This ensures tasks are processed in the run_loop, integrating GPUI with OpenHarmony's event loop
-        self.run_foreground_tasks();
         self.dispatch_menu_events();
         self.dispatch_menu_open_events();
         self.dispatch_system_state_events();
@@ -1634,7 +1620,7 @@ pub(super) fn retain_file_access(
     }
     executor
         .spawn(async move {
-            if let Err(error) = file_access.remember(&uris) {
+            if let Err(error) = file_access.remember(&uris, false) {
                 warn!("Could not save incoming file access: {error:#}");
                 if let Some(app) = app {
                     show_platform_error(
@@ -1668,6 +1654,7 @@ pub(super) async fn show_platform_error(
                 buttons: vec!["OK".into()],
                 cancel_index: Some(0),
                 anchor: None,
+                appearance: None,
             })
             .await?;
         Ok::<(), anyhow::Error>(())
@@ -1700,12 +1687,13 @@ async fn selected_paths(
     file_access: &super::file_access::FileAccess,
     app: OpenHarmonyApp,
     window_id: i64,
+    writable: bool,
 ) -> Result<Option<Vec<PathBuf>>> {
     if uris.is_empty() {
         return Ok(None);
     }
     let paths = resolve_file_paths(&uris)?;
-    if let Err(error) = file_access.remember(&uris) {
+    if let Err(error) = file_access.remember(&uris, writable) {
         warn!("Could not save file picker access: {error:#}");
         show_platform_error(app, window_id, "File access could not be saved", format!(
             "This selection is available now, but you may need to select it again after restarting.\n\n{error:#}"
@@ -2375,6 +2363,7 @@ impl Platform for OhosPlatform {
                         &file_access,
                         app,
                         parent_window_id.unwrap_or(0),
+                        false,
                     )
                     .await
                 }
@@ -2424,6 +2413,7 @@ impl Platform for OhosPlatform {
                         &file_access,
                         app,
                         parent_window_id.unwrap_or(0),
+                        true,
                     )
                     .await?
                     .and_then(|mut paths| paths.pop()))
@@ -2517,7 +2507,11 @@ impl Platform for OhosPlatform {
                     text: Some(menu.name.to_string()),
                     enabled: Some(!menu.disabled),
                     accelerator: None,
+<<<<<<< HEAD
                     accelerator_display_only: None,
+=======
+                    accelerator_display_only: Some(true),
+>>>>>>> codex/ohostty-02-glyph-images
                     predefined_type: None,
                     checked: None,
                     icon: None,
