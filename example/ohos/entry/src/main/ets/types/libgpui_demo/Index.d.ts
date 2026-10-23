@@ -42,29 +42,13 @@ export interface UrlSchemeResponse {
   declared: boolean
 }
 
-export interface ClipboardChangedEvent {
-
-}
-
-export interface ClipboardClearRequest {
-
-}
-
-export interface ClipboardClearResponse {
-  accepted: boolean
-}
-
 /**
-  * An exact, binary-safe representation, rather than a lossy projection into
-  * plain text, a decoded PixelMap, or a file URI.
+  * One exact representation. Text/HTML must be UTF-8 without embedded NUL;
+  * other formats are opaque bytes and cannot be empty on the native API.
   */
 export interface ClipboardMimeContent {
   mime: string
   data: Array<number>
-}
-
-export interface ClipboardReadAuthorizedRecordsRequest {
-
 }
 
 export interface ClipboardReadContentResponse {
@@ -73,76 +57,17 @@ export interface ClipboardReadContentResponse {
   uris: Array<string>
 }
 
-export interface ClipboardReadMimeRequest {
-  mimes: Array<string>
-  list: boolean
-}
-
 export interface ClipboardReadMimeResponse {
   contents: Array<ClipboardMimeContent>
   available: Array<string>
 }
 
-export interface ClipboardReadRecordsResponse {
-  records: Array<ClipboardRecord>
-}
-
-export interface ClipboardReadTextRequest {
-
-}
-
-export interface ClipboardReadTextResponse {
-  text?: string
-}
-
-/** One native pasteboard record. Exactly one of text, encoded_image, or uri is set. */
+/** A convenience projection of one record. Use `read_mime` for all representations. */
 export interface ClipboardRecord {
   text?: string
   metadata?: string
   encodedImage?: Array<number>
   uri?: string
-}
-
-export interface ClipboardWriteEncodedImageRequest {
-  bytes: Array<number>
-}
-
-export interface ClipboardWriteHtmlRequest {
-  html: string
-}
-
-export interface ClipboardWriteHtmlResponse {
-  accepted: boolean
-}
-
-export interface ClipboardWriteImageRequest {
-  rgba: Array<number>
-  width: number
-  height: number
-}
-
-export interface ClipboardWriteImageResponse {
-  accepted: boolean
-}
-
-export interface ClipboardWriteMimeRequest {
-  contents: Array<ClipboardMimeContent>
-}
-
-export interface ClipboardWriteRecordsRequest {
-  records: Array<ClipboardRecord>
-}
-
-export interface ClipboardWriteTextRequest {
-  text: string
-}
-
-export interface ClipboardWriteTextResponse {
-  accepted: boolean
-}
-
-export interface ClipboardWriteUrisRequest {
-  uris: Array<string>
 }
 
 /**
