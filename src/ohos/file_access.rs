@@ -554,14 +554,14 @@ mod tests {
         directory.write(&grants(1, READ));
         let original = std::fs::read(directory.history()).unwrap();
         let access = directory
-            .access(crate::platform_options::PlatformOptions::default().persist_file_access);
+            .access(super::super::platform_options::PlatformOptions::default().persist_file_access);
         assert!(!access.on_presentation(Presentation::Presented));
         access.restore().unwrap();
         access.remember(&uris(1), true).unwrap();
         assert_eq!(std::fs::read(directory.history()).unwrap(), original);
         assert!(access.state.lock().policies.is_none());
         assert!(access.state.lock().pending.is_empty());
-        assert!(crate::platform_options::PlatformOptions::default().native_menus);
+        assert!(super::super::platform_options::PlatformOptions::default().native_menus);
     }
 
     #[test]

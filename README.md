@@ -92,15 +92,15 @@ persistence does not revoke grants already stored by the OS or delete history.
 | `vulkan` | Vulkan rendering. |
 | `native-vsync` | Use NativeVSync frame callbacks instead of XComponent callbacks. |
 | `grid` | Experimental fixed-cell terminal shaping; disabled by default. |
-| `keyboard-text-input` | Configure native hardware-key consumption before IME attachment (API 26+). |
-| `keyboard-focus-recovery` | Restore native surface focus on window activation (API 26+). |
+| `api-19` | Enable API-19 CapsLock / NumLock / ScrollLock state snapshots on keyboard events. |
+| `api-26` | Enable `api-19` and configure native hardware-key consumption before IME attachment (API 26+). |
 
 Touch scrolling uses native gesture recognition and supports momentum scrolling.
 Frames are requested on demand through XComponent callbacks by default.
-The API-26 keyboard features are opt-in for the library and enabled in the
-example. Applications enabling them must ship with a compatible API-26 SDK and
-runtime; runtime configuration is guarded, but linking newer native APIs can
-raise the application's minimum supported system version.
+The `api-19` and `api-26` features are opt-in for the library, and `api-26` is
+enabled in the example. Applications enabling them must ship with a compatible
+SDK and runtime; runtime configuration is guarded, but linking newer native APIs
+can raise the application's minimum supported system version.
 
 Ability delivers each physical key once with its IME disposition. Consumed
 transitions update held keys and modifiers without dispatching GPUI commands or
@@ -178,7 +178,7 @@ git submodule update --init --recursive
 ```
 
 Rust dependencies use the authorized coherent Ability integration revision
-`a4cfea0ea820b9149997a296744057ea080fbe52` from existing
+`0e41a3141d1053e9a5172738538d725b050e2d36` from existing
 [Ability #98](https://github.com/harmony-contrib/openharmony-ability/pull/98);
 the example's ArkTS submodule uses that same commit. The library no longer reads
 Rust sources from `example/`.
