@@ -1,0 +1,19 @@
+name: Host audio
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  host-audio:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        features: ["", "audio"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run host harness with audio off and on
+        env:
+          CARGO_BUILD_JOBS: "2"
+        run: cargo test --manifest-path tests/touch/Cargo.toml --no-default-features --features "${{ matrix.features }}"

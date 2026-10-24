@@ -91,6 +91,7 @@ persistence does not revoke grants already stored by the OS or delete history.
 | `gles` | OpenGL ES rendering, enabled by default. |
 | `vulkan` | Vulkan rendering. |
 | `native-vsync` | Use NativeVSync frame callbacks instead of XComponent callbacks. |
+| `audio` | Opt-in owned-file audio playback and its Ability plugin dependency. Disabled by default. |
 | `grid` | Experimental fixed-cell terminal shaping; disabled by default. |
 | `native-input` | Opt in to native pointer coordinates and event-scoped wheel metadata; disabled by default. |
 | `api-19` | Enable API-19 CapsLock / NumLock / ScrollLock state snapshots on keyboard events. |
@@ -267,6 +268,38 @@ cargo test -p ohos-text-tests --locked --features grid
 The host harness generates its original font fixtures in Cargo's build output;
 no binary fonts or separate text-test lockfile are committed. See
 [the test harness](./tests/text/README.md) for coverage and Python selection.
+
+## Optional file audio
+
+Enable the nondefault `audio` Cargo feature when building this backend, or add
+`features = ["audio"]` to the application's existing `gpui-ohos` dependency:
+
+```sh
+cargo build --target aarch64-unknown-linux-ohos --features audio
+```
+
+Without this feature, the audio module, public audio types and Ability audio
+dependency are excluded. Enabling it does not register a plugin automatically.
+
+Register `gpui_ohos::AudioBridgePlugin` on the application's `OpenHarmonyApp` and
+add the matching `AudioPlugin` factory from `@ohos-rs/ability-plugin-audio` to its
+ArkTS entry. Then construct `NativeAudioService::new(app, foreground_executor)`.
+It rejects an unregistered Rust facade instead of silently adding a required HAR
+to every existing application. Players accept owned `File` values, serialize
+commands and retain each file until native descriptor duplication completes.
+Dropping a player queues release behind its pending playback updates.
+
+This service is a consumer convenience, not part of GPUI's platform interface.
+Applications such as ohostty should eventually own this integration directly.
+
+Host checks (the audio bridge is a shim; the command queue and service are real):
+
+```sh
+cargo test --manifest-path tests/touch/Cargo.toml --no-default-features
+cargo test --manifest-path tests/touch/Cargo.toml --no-default-features --features audio
+```
+
+These checks do not establish native playback or descriptor-duplication acceptance.
 
 ## Explicit image alpha and sampling
 

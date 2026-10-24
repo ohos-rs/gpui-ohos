@@ -4,6 +4,17 @@ extern crate self as napi_ohos;
 #[cfg(test)]
 extern crate self as ohos_fileuri_binding;
 extern crate self as openharmony_ability;
+#[cfg(all(test, feature = "audio"))]
+extern crate self as openharmony_ability_plugin_audio;
+#[cfg(all(test, feature = "audio"))]
+#[allow(dead_code)]
+#[path = "../../src/ohos/audio.rs"]
+mod audio;
+#[cfg(all(test, feature = "audio"))]
+#[path = "support/audio.rs"]
+mod audio_support;
+#[cfg(all(test, feature = "audio"))]
+pub use audio_support::{AudioBridgePlugin, AudioClient, AudioUpdateRequest};
 #[cfg(test)]
 extern crate self as openharmony_ability_plugin_clipboard;
 #[cfg(test)]
