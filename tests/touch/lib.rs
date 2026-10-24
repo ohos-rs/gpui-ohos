@@ -1,7 +1,23 @@
 // Native wake and the main queue are host shims; GPUI futures and production queues are real.
 #[cfg(test)]
 extern crate self as napi_ohos;
+#[cfg(test)]
+extern crate self as ohos_fileuri_binding;
 extern crate self as openharmony_ability;
+#[cfg(test)]
+extern crate self as openharmony_ability_plugin_clipboard;
+#[cfg(test)]
+#[path = "support/clipboard.rs"]
+mod clipboard_support;
+#[cfg(test)]
+pub use clipboard_support::{
+    ClipboardBridgePlugin, ClipboardClient, ClipboardError, ClipboardRecord, get_path_from_uri,
+    get_uri_from_path,
+};
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../src/ohos/clipboard.rs"]
+mod clipboard;
 #[cfg(test)]
 #[path = "support/frame_delivery.rs"]
 mod frame_delivery_support;
@@ -13,11 +29,181 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 use frame_delivery_support::native_frames;
 #[cfg(test)]
 use frame_delivery_support::window;
+#[allow(dead_code)]
+#[path = "../../src/ohos/cursor_visibility.rs"]
+mod cursor_visibility;
 #[cfg(test)]
 #[allow(dead_code)]
 #[path = "../../src/ohos/frame_delivery.rs"]
 mod frame_delivery;
-pub use gpui::{Pixels, PlatformDispatcher, Priority, RunnableVariant, Size};
+#[allow(dead_code)]
+#[path = "../../src/ohos/launch.rs"]
+mod launch;
+pub use gpui::{
+    BackgroundExecutor, Capslock, ClipboardEntry, ClipboardItem, ClipboardReadError,
+    ClipboardString, ExternalPaths, ForegroundExecutor, Image, ImageFormat, KeyDownEvent,
+    KeyUpEvent, KeybindingKeystroke, Keystroke, Modifiers, ModifiersChangedEvent, Pixels,
+    PlatformDispatcher, PlatformInput, PlatformKeyboardLayout, PlatformKeyboardMapper, Priority,
+    RunnableVariant, Size, Task,
+};
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../src/ohos/keyboard.rs"]
+mod keyboard;
+
+// Native snapshots are host shims; key translation and GPUI input types are production code.
+#[cfg(test)]
+#[allow(dead_code)]
+pub mod xcomponent {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum Action {
+        Unknown,
+        Down,
+        Up,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum EventSource {
+        Keyboard,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum KeyCode {
+        A,
+        B,
+        C,
+        D,
+        E,
+        F,
+        G,
+        H,
+        I,
+        J,
+        K,
+        L,
+        M,
+        N,
+        O,
+        P,
+        Q,
+        R,
+        S,
+        T,
+        U,
+        V,
+        W,
+        X,
+        Y,
+        Z,
+        Key0,
+        Key1,
+        Key2,
+        Key3,
+        Key4,
+        Key5,
+        Key6,
+        Key7,
+        Key8,
+        Key9,
+        Numpad0,
+        Numpad1,
+        Numpad2,
+        Numpad3,
+        Numpad4,
+        Numpad5,
+        Numpad6,
+        Numpad7,
+        Numpad8,
+        Numpad9,
+        DpadUp,
+        DpadDown,
+        DpadLeft,
+        DpadRight,
+        DpadCenter,
+        Enter,
+        NumpadEnter,
+        Del,
+        ForwardDel,
+        Tab,
+        Space,
+        Escape,
+        PageUp,
+        PageDown,
+        MoveHome,
+        MoveEnd,
+        Insert,
+        Comma,
+        Period,
+        Grave,
+        Minus,
+        Equals,
+        LeftBracket,
+        RightBracket,
+        Backslash,
+        Semicolon,
+        Apostrophe,
+        Slash,
+        F1,
+        F2,
+        F3,
+        F4,
+        F5,
+        F6,
+        F7,
+        F8,
+        F9,
+        F10,
+        F11,
+        F12,
+        NumpadDivide,
+        NumpadMultiply,
+        NumpadSubtract,
+        NumpadAdd,
+        NumpadDot,
+        NumpadComma,
+        NumpadEquals,
+        NumpadLeftParen,
+        NumpadRightParen,
+        NumpadPlusMinus,
+        CtrlLeft,
+        CtrlRight,
+        AltLeft,
+        AltRight,
+        ShiftLeft,
+        ShiftRight,
+        MetaLeft,
+        MetaRight,
+        Fn,
+        Function,
+        CapsLock,
+        NumLock,
+        Unknown,
+    }
+
+    pub struct KeyEventData {
+        pub code: KeyCode,
+        pub action: Action,
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub struct KeyboardEventResponse;
+
+#[cfg(test)]
+pub struct KeyboardEventData {
+    pub code: xcomponent::KeyCode,
+    pub action: xcomponent::Action,
+    pub device_id: i64,
+    pub source: xcomponent::EventSource,
+    pub timestamp: i64,
+    pub unicode: u32,
+    pub pressed_keys: Option<Vec<xcomponent::KeyCode>>,
+    pub caps_lock: Option<bool>,
+    pub num_lock: Option<bool>,
+    pub ime_consumed: bool,
+    pub response: KeyboardEventResponse,
+}
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},

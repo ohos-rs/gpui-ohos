@@ -3,9 +3,9 @@ use log::{debug, info, warn};
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    rc::Rc,
+    rc::{Rc, Weak},
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use accesskit_ohos::Adapter as OhosA11yAdapter;
@@ -15,19 +15,25 @@ use ohos_accessibility_binding::Provider;
 use openharmony_ability::{
     ArkUiInputEvent, AvoidAreaType, Event, ImeEvent, InputEvent, OpenHarmonyApp, PointerInputData,
     XComponentInputEvent,
-    arkui::arkui_input_binding::{UIInputAction, UIInputSourceType, UIInputToolType},
-    arkui::component::attribute::ArkUICommonAttribute,
+    arkui::arkui_input_binding::{UIInputAction, UIInputEvent, UIInputSourceType, UIInputToolType},
+    arkui::component::attribute::{ArkUIAttributeBasic, ArkUICommonAttribute},
     ime::{
-        Action as ImeAction, Direction as ImeDirection, EnterKey, InputType, Rect as ImeCursorRect,
-        TextState,
+        Action as ImeAction, Direction as ImeDirection, EnterKey, IME, ImeResult, InputType,
+        Rect as ImeCursorRect, TextState,
     },
     xcomponent::{
-        MouseAction, MouseButton as OhosMouseButton, TouchEvent as OhosTouchEvent, TouchEventData,
-        TouchPointData,
+        Action as KeyAction, MouseAction, MouseButton as OhosMouseButton,
+        TouchEvent as OhosTouchEvent, TouchEventData, TouchPointData, TouchPointTool,
     },
 };
-use openharmony_ability_plugin_window::WindowClient;
+use openharmony_ability_plugin_menu::{
+    MenuClient, MenuCommandItem, MenuPopupCommandsRequest, MenuPopupMenubarRequest,
+};
+use openharmony_ability_plugin_window::{
+    WindowClient, WindowCloseSubscription, WindowMoveSubscription, on_window_close_requested,
+};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use rustc_hash::FxHashMap;
 
 use super::display::OhosDisplay;
 use super::frame_delivery::WindowFrames;
@@ -40,11 +46,12 @@ use super::wgpu_context::WgpuContext;
 use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
 use crate::{
     A11yCallbacks, AnyWindowHandle, Bounds, Capslock, CursorStyle, DevicePixels, Edges,
-    ForegroundExecutor, GestureTuning, GpuSpecs, KeyDownEvent, Keystroke, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, PlatformAtlas,
-    PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton,
-    PromptLevel, RequestFrameOptions, ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, Task,
-    TextInputAction, TextInputConfiguration, TextInputStateChange, TouchEvent, TouchId, TouchPhase,
+    ForegroundExecutor, FrameRequestSource, GestureTuning, GpuSpecs, KeyDownEvent, Keystroke,
+    Modifiers, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent,
+    NavigationDirection, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
+    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, Task, TextInputAction,
+    TextInputConfiguration, TextInputStateChange, TouchEvent, TouchId, TouchPhase,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
     WindowDecorations, WindowInsets, WindowParams, WindowVisibility, accesskit, point, px, size,
 };
@@ -52,26 +59,38 @@ use crate::{
 pub(crate) type BackHandler = Rc<RefCell<Option<Box<dyn FnMut()>>>>;
 type ResizeCallback = Box<dyn FnMut(Size<Pixels>, f32)>;
 
+type WindowList = RefCell<Vec<Weak<RefCell<OhosWindow>>>>;
+type WindowIndex = RefCell<FxHashMap<i64, Weak<RefCell<OhosWindow>>>>;
+
 pub(crate) struct OhosWindowContext {
+    pub(crate) native_menus: bool,
+    pub(crate) windows: Weak<WindowList>,
+    pub(crate) window_index: Weak<WindowIndex>,
     pub(crate) app: Rc<RefCell<Option<OpenHarmonyApp>>>,
     pub(crate) handle: AnyWindowHandle,
     pub(crate) params: WindowParams,
     pub(crate) gpu_context: Arc<WgpuContext>,
     pub(crate) display: OhosDisplay,
     pub(crate) foreground_executor: ForegroundExecutor,
+    pub(crate) background_executor: crate::BackgroundExecutor,
     pub(crate) frame_callback_active: Rc<Cell<bool>>,
     pub(crate) clipboard: super::clipboard::OhosClipboard,
-    pub(crate) cursor_hidden_until_move: Rc<Cell<bool>>,
+    pub(crate) file_access: Arc<super::file_access::FileAccess>,
+    pub(crate) cursor_visibility: Rc<RefCell<super::cursor_visibility::CursorVisibility>>,
     pub(crate) cursor_style: Rc<Cell<Option<(i64, CursorStyle)>>>,
     pub(crate) appearance_override: Rc<Cell<Option<WindowAppearance>>>,
     pub(crate) window_id: i64,
     pub(crate) fallback_atlas: Option<Arc<WgpuAtlas>>,
-    pub(crate) quit: Rc<dyn Fn()>,
 }
 
 pub(crate) struct OhosWindow {
+    native_menus: bool,
+    windows: Weak<WindowList>,
+    window_index: Weak<WindowIndex>,
+    released: Rc<Cell<bool>>,
+    close_subscription: RefCell<Option<WindowCloseSubscription>>,
+    move_subscription: RefCell<Option<WindowMoveSubscription>>,
     app: Rc<RefCell<Option<OpenHarmonyApp>>>,
-    quit: Rc<dyn Fn()>,
     pub(crate) handle: AnyWindowHandle,
     bounds: RefCell<Bounds<Pixels>>,
     viewport: super::viewport::ViewportPublisher,
@@ -83,6 +102,7 @@ pub(crate) struct OhosWindow {
     title_generation: Rc<Cell<u64>>,
     restore_state: Rc<RefCell<Option<super::window_state::NativeWindowState>>>,
     restore_pending: Rc<Cell<bool>>,
+    mode_operations: Rc<futures::lock::Mutex<()>>,
     floating_state: Cell<Option<super::window_state::NativeWindowState>>,
     is_movable: bool,
     is_resizable: bool,
@@ -97,8 +117,11 @@ pub(crate) struct OhosWindow {
     background_pending: Rc<Cell<bool>>,
     background_generation: Rc<Cell<u64>>,
     active: Cell<bool>,
+    activation_pending: Cell<bool>,
+    activation_generation: Cell<u64>,
     hovered: Cell<bool>,
     visibility: Cell<WindowVisibility>,
+    show_on_creation: bool,
     decorations: Rc<Cell<WindowDecorations>>,
     requested_decorations: Cell<WindowDecorations>,
     insets: RefCell<WindowInsets>,
@@ -107,19 +130,27 @@ pub(crate) struct OhosWindow {
     ime_text_update_pending: Rc<Cell<bool>>,
     edit_generation: Rc<Cell<u64>>,
     clipboard: super::clipboard::OhosClipboard,
+    file_access: Arc<super::file_access::FileAccess>,
     callbacks: Rc<RefCell<WindowCallbacks>>,
     renderer: RefCell<Option<WgpuRenderer>>,
     presentation: PresentationDemand,
+    defer_presentation: Cell<bool>,
     surface_available: Cell<bool>,
+    input_ready: Cell<bool>,
+    surface_focused: Cell<bool>,
     force_render: Cell<bool>,
     gpu_context: Arc<WgpuContext>,
     display: OhosDisplay,
     fallback_atlas: RefCell<Option<Arc<WgpuAtlas>>>,
     foreground_executor: ForegroundExecutor,
-    cursor_hidden_until_move: Rc<Cell<bool>>,
+    background_executor: crate::BackgroundExecutor,
+    cursor_visibility: Rc<RefCell<super::cursor_visibility::CursorVisibility>>,
     cursor_style: Rc<Cell<Option<(i64, CursorStyle)>>>,
     keyboard_visible: Rc<Cell<bool>>,
     ime_action: Cell<TextInputAction>,
+    ime_retry_generation: Cell<u64>,
+    ime_recovery_pending: Cell<bool>,
+    ime_retry_pending: Cell<bool>,
     pointer_position: Cell<Option<Point<Pixels>>>,
     pointer_screen_position: Cell<Option<(i64, i64)>>,
     pressed_mouse_button: Cell<Option<MouseButton>>,
@@ -137,6 +168,7 @@ pub(crate) struct OhosWindow {
     a11y_adapter: RefCell<Option<OhosA11yAdapter<'static>>>,
     key_state: RefCell<OhosKeyState>,
     active_touches: RefCell<HashMap<i32, TouchId>>,
+    primary_touch: Cell<Option<i32>>,
     touch_tap_candidates: RefCell<HashMap<i32, TouchTapCandidate>>,
     next_touch_id: Cell<u64>,
     touch_scroll: Rc<RefCell<TouchScroll>>,
@@ -144,8 +176,15 @@ pub(crate) struct OhosWindow {
 }
 
 pub(crate) struct OhosWindowHandle {
+    released: Rc<Cell<bool>>,
     inner: Rc<RefCell<OhosWindow>>,
     input_handler: Rc<RefCell<Option<PlatformInputHandler>>>,
+}
+
+impl Drop for OhosWindowHandle {
+    fn drop(&mut self) {
+        self.released.set(true);
+    }
 }
 
 impl Drop for OhosWindow {
@@ -156,7 +195,31 @@ impl Drop for OhosWindow {
             .set(self.background_generation.get().wrapping_add(1));
         self.invalidate_pending_edit();
         let was_closed = self.closed.replace(true);
+        self.title_generation
+            .set(self.title_generation.get().wrapping_add(1));
+        self.close_subscription.borrow_mut().take();
+        self.move_subscription.borrow_mut().take();
         self.release_accessibility();
+        if self.window_id == 0 && !was_closed {
+            let successor = self.windows.upgrade().and_then(|windows| {
+                windows
+                    .borrow()
+                    .iter()
+                    .rev()
+                    .filter_map(Weak::upgrade)
+                    .find(|window| {
+                        let window = window.borrow();
+                        !window.closed.get() && !window.released.get()
+                    })
+            });
+            if let Some(successor) = successor {
+                successor
+                    .borrow_mut()
+                    .take_main_surface(self, Rc::downgrade(&successor));
+                Self::register_close_handler(&successor);
+                return;
+            }
+        }
         if self.window_id == 0 || was_closed {
             return;
         }
@@ -178,9 +241,11 @@ impl OhosWindowHandle {
     pub(crate) fn new(inner: Rc<RefCell<OhosWindow>>) -> Self {
         inner.borrow().frames.set_window(Rc::downgrade(&inner));
         let input_handler = inner.borrow().input_handler.clone();
+        let released = inner.borrow().released.clone();
         Self {
             inner,
             input_handler,
+            released,
         }
     }
 
@@ -200,6 +265,7 @@ struct WindowCallbacks {
     hover_status_change: Option<Box<dyn FnMut(bool)>>,
     resize: Option<ResizeCallback>,
     moved: Option<Box<dyn FnMut()>>,
+    display_changed: Option<Box<dyn FnMut()>>,
     should_close: Option<Box<dyn FnMut() -> bool>>,
     close: Option<Box<dyn FnOnce()>>,
     appearance_changed: Option<Box<dyn FnMut()>>,
@@ -241,6 +307,220 @@ impl accesskit::ActionHandler for OhosA11yAction {
 }
 
 impl OhosWindow {
+    pub(crate) fn register_close_handler(window: &Rc<RefCell<Self>>) {
+        let weak_window = Rc::downgrade(window);
+        let foreground = window.borrow().foreground_executor.clone();
+        let subscription = on_window_close_requested(window.borrow().window_id, move || {
+            let Some(window) = weak_window.upgrade() else {
+                return false;
+            };
+            if window.borrow().released.get() || window.borrow().closed.get() {
+                return false;
+            }
+            foreground
+                .spawn(async move {
+                    Self::request_close(&window);
+                })
+                .detach();
+            true
+        });
+        *window.borrow().close_subscription.borrow_mut() = Some(subscription);
+        *window.borrow().move_subscription.borrow_mut() =
+            Some(WindowMoveSubscription::new(window.borrow().window_id));
+    }
+
+    fn request_close(window: &Rc<RefCell<Self>>) {
+        let callbacks = {
+            let window = window.borrow();
+            if window.closed.get() || window.released.get() {
+                return;
+            }
+            window.focus_native_surface();
+            window.callbacks.clone()
+        };
+        // Zed can synchronously reenter the platform while starting its async save workflow.
+        let mut should_close = callbacks.borrow_mut().should_close.take();
+        let allowed = should_close.as_mut().is_none_or(|callback| callback());
+        callbacks.borrow_mut().should_close = should_close;
+        if allowed {
+            let close = callbacks.borrow_mut().close.take();
+            if let Some(close) = close {
+                close();
+            }
+        }
+    }
+
+    pub(crate) fn dispatch_window_menu_command(window: &Rc<RefCell<Self>>, command: &str) -> bool {
+        if window.borrow().closed.get() || window.borrow().released.get() {
+            return true;
+        }
+        match command {
+            "gpui-window-minimize" => window.borrow().minimize(),
+            "gpui-window-zoom" => window.borrow().zoom(),
+            "gpui-window-fullscreen" => window.borrow().toggle_fullscreen(),
+            "gpui-window-close" => Self::request_close(window),
+            _ => return false,
+        }
+        true
+    }
+
+    fn focus_native_surface(&self) {
+        if !self.active.get() || !self.surface_available.get() {
+            return;
+        }
+        let app = self.app.borrow().clone();
+        if let Some(app) = app
+            && let Err(error) = app.request_xcomponent_focus_for(self.window_id)
+        {
+            warn!("Failed to focus OHOS render surface: {error}");
+        }
+    }
+
+    fn native_menu_focus_id(&self) -> Option<String> {
+        if !self.surface_available.get() || !self.surface_focused.get() {
+            return None;
+        }
+        let component = self
+            .app
+            .borrow()
+            .as_ref()
+            .and_then(|app| app.with_xcomponent_for(self.window_id, Clone::clone))?;
+        let identifier = format!("gpui-window-{}-render-surface", self.window_id);
+        if let Err(error) = component.id(identifier.clone()) {
+            warn!("Failed to identify OHOS menu focus target: {error}");
+            return None;
+        }
+        Some(identifier)
+    }
+
+    fn cancel_activation(&self) {
+        self.activation_pending.set(false);
+        self.activation_generation
+            .set(self.activation_generation.get().wrapping_add(1));
+    }
+
+    fn cancel_other_activations(&self) {
+        if let Some(windows) = self.windows.upgrade() {
+            for window in windows.borrow().iter().filter_map(Weak::upgrade) {
+                let window = window.borrow();
+                if window.window_id != self.window_id {
+                    window.cancel_activation();
+                }
+            }
+        }
+    }
+
+    fn activation_is_pending(&self, generation: u64) -> bool {
+        self.activation_pending.get()
+            && self.activation_generation.get() == generation
+            && !self.closed.get()
+            && !self.released.get()
+    }
+
+    fn take_main_surface(&mut self, main: &mut Self, successor: Weak<RefCell<Self>>) {
+        let rect = self
+            .app
+            .borrow()
+            .as_ref()
+            .map(|app| app.window_rect_for(self.window_id))
+            .filter(|rect| rect.width > 0 && rect.height > 0);
+        self.frames.set_active(false, self.surface_available.get());
+        self.a11y_adapter.borrow_mut().take();
+        self.close_subscription.borrow_mut().take();
+        self.move_subscription.borrow_mut().take();
+        self.invalidate_pending_edit();
+        self.title_generation
+            .set(self.title_generation.get().wrapping_add(1));
+        self.background_generation
+            .set(self.background_generation.get().wrapping_add(1));
+        self.background_pending.set(false);
+        // The native surface survives, but queued edits still belong to the closing editor.
+        if let Some(app) = self.app.borrow().as_ref() {
+            if let Err(error) = app.reset_ime_for(0) {
+                warn!("Failed to reset transferred OHOS editor: {error}");
+            }
+        }
+        let child_id = self.window_id;
+        std::mem::swap(&mut self.window_id, &mut main.window_id);
+        std::mem::swap(&mut self.renderer, &mut main.renderer);
+        std::mem::swap(&mut self.fallback_atlas, &mut main.fallback_atlas);
+        *self.bounds.borrow_mut() = *main.bounds.borrow();
+        *self.scale.borrow_mut() = *main.scale.borrow();
+        self.display = main.display.clone();
+        self.surface_available.set(main.surface_available.get());
+        self.input_ready.set(main.input_ready.get());
+        self.surface_focused.set(main.surface_focused.get());
+        self.frames.rebind_window(0);
+        if let Some(index) = self.window_index.upgrade() {
+            let mut index = index.borrow_mut();
+            index.remove(&child_id);
+            index.insert(0, successor.clone());
+        }
+        let Some(client) = self.window_client() else {
+            return;
+        };
+        let maximized = self.maximized.get();
+        let fullscreen = self.fullscreen.get();
+        let restore_main = main.maximized.get() || main.fullscreen.get();
+        self.foreground_executor
+            .spawn(async move {
+                let result = async {
+                    if restore_main {
+                        client.recover_window(0).await?;
+                    }
+                    if let Some(rect) = rect {
+                        client
+                            .move_window_to(0, i64::from(rect.left), i64::from(rect.top))
+                            .await?;
+                        client
+                            .resize_window(0, i64::from(rect.width), i64::from(rect.height))
+                            .await?;
+                    }
+                    if fullscreen {
+                        client.set_fullscreen(0, true).await?;
+                    } else if maximized {
+                        client.maximize_window(0).await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await;
+                if let Err(error) = result {
+                    warn!("Failed to restore transferred OHOS window: {error}");
+                }
+                // Keep the child visible while the main surface moves into place, otherwise
+                // closing the main editor briefly moves the survivor to the closed window.
+                // Destroy the child before attaching its logical editor to the main IME.
+                if let Err(error) = client.destroy_window(child_id).await {
+                    warn!("Failed to destroy transferred OHOS window {child_id}: {error}");
+                }
+                if let Err(error) = client.focus_window(0).await {
+                    warn!("Failed to focus transferred OHOS window: {error}");
+                }
+                if let Some(successor) = successor.upgrade() {
+                    let window = successor.borrow();
+                    if !window.closed.get() && !window.released.get() {
+                        window.apply_window_options();
+                        window.request_decorations(window.requested_decorations.get());
+                        window.apply_requested_background();
+                        window.initialize_accessibility();
+                        window.focus_native_surface();
+                        window.apply_ime_action(true);
+                        window.schedule_ime_text_update();
+                        window.handle_event(&Event::WindowFocusChanged {
+                            window_id: 0,
+                            focused: true,
+                        });
+                        window.refresh_insets();
+                        window.emit_resize_callback();
+                        window.sync_frame_delivery();
+                        window.force_render.set(true);
+                        window.schedule_frame();
+                    }
+                }
+            })
+            .detach();
+    }
+
     fn initialize_accessibility(&self) {
         if self.a11y_adapter.borrow().is_some() {
             return;
@@ -319,20 +599,24 @@ impl OhosWindow {
 
     pub(crate) fn new(context: OhosWindowContext) -> Result<Self> {
         let OhosWindowContext {
+            native_menus,
+            windows,
+            window_index,
             app,
             handle,
             params,
             gpu_context,
             display,
             foreground_executor,
+            background_executor,
             frame_callback_active,
             clipboard,
-            cursor_hidden_until_move,
+            file_access,
+            cursor_visibility,
             cursor_style,
             appearance_override,
             window_id,
             fallback_atlas,
-            quit,
         } = context;
         let scale = display.scale_factor();
         let appearance = appearance_override.get().unwrap_or_else(|| {
@@ -354,8 +638,13 @@ impl OhosWindow {
         // At that point, native_window from OpenHarmonyApp will be available.
 
         Ok(Self {
+            native_menus,
+            windows,
+            window_index,
+            released: Rc::new(Cell::new(false)),
+            close_subscription: RefCell::new(None),
+            move_subscription: RefCell::new(None),
             app: app.clone(),
-            quit,
             handle,
             bounds: RefCell::new(bounds),
             viewport: super::viewport::ViewportPublisher::default(),
@@ -373,6 +662,7 @@ impl OhosWindow {
             title_generation: Rc::new(Cell::new(0)),
             restore_state: Rc::new(RefCell::new(None)),
             restore_pending: Rc::new(Cell::new(false)),
+            mode_operations: Rc::new(futures::lock::Mutex::new(())),
             floating_state: Cell::new(None),
             is_movable: params.is_movable,
             is_resizable: params.is_resizable,
@@ -387,8 +677,15 @@ impl OhosWindow {
             background_pending: Rc::new(Cell::new(false)),
             background_generation: Rc::new(Cell::new(0)),
             active: Cell::new(window_id == 0),
+            activation_pending: Cell::new(false),
+            activation_generation: Cell::new(0),
             hovered: Cell::new(false),
-            visibility: Cell::new(WindowVisibility::Visible),
+            show_on_creation: params.show,
+            visibility: Cell::new(if params.show {
+                WindowVisibility::Visible
+            } else {
+                WindowVisibility::Hidden
+            }),
             decorations: Rc::new(Cell::new(WindowDecorations::Server)),
             requested_decorations: Cell::new(WindowDecorations::Server),
             insets: RefCell::new(WindowInsets::default()),
@@ -397,6 +694,7 @@ impl OhosWindow {
             ime_text_update_pending: Rc::new(Cell::new(false)),
             edit_generation: Rc::new(Cell::new(0)),
             clipboard,
+            file_access,
             callbacks: Rc::new(RefCell::new(WindowCallbacks {
                 request_frame: None,
                 input: None,
@@ -407,6 +705,7 @@ impl OhosWindow {
                 hover_status_change: None,
                 resize: None,
                 moved: None,
+                display_changed: None,
                 should_close: None,
                 close: None,
                 appearance_changed: None,
@@ -414,16 +713,27 @@ impl OhosWindow {
             })),
             renderer: RefCell::new(None),
             presentation: PresentationDemand::default(),
+            defer_presentation: Cell::new(false),
             surface_available: Cell::new(false),
+            input_ready: Cell::new(
+                app.borrow()
+                    .as_ref()
+                    .is_some_and(|app| app.is_text_input_ready_for(window_id)),
+            ),
+            surface_focused: Cell::new(true),
             force_render: Cell::new(false),
             gpu_context,
             display,
             fallback_atlas: RefCell::new(fallback_atlas),
             foreground_executor,
-            cursor_hidden_until_move,
+            background_executor,
+            cursor_visibility,
             cursor_style,
             keyboard_visible: Rc::new(Cell::new(false)),
             ime_action: Cell::new(TextInputAction::Unspecified),
+            ime_retry_generation: Cell::new(0),
+            ime_recovery_pending: Cell::new(false),
+            ime_retry_pending: Cell::new(false),
             pointer_position: Cell::new(None),
             pointer_screen_position: Cell::new(None),
             pressed_mouse_button: Cell::new(None),
@@ -441,6 +751,7 @@ impl OhosWindow {
             a11y_adapter: RefCell::new(None),
             key_state: RefCell::new(OhosKeyState::default()),
             active_touches: RefCell::new(HashMap::new()),
+            primary_touch: Cell::new(None),
             touch_tap_candidates: RefCell::new(HashMap::new()),
             next_touch_id: Cell::new(0),
             touch_scroll: Rc::new(RefCell::new(TouchScroll::default())),
@@ -466,6 +777,27 @@ impl OhosWindow {
         }
     }
 
+    pub(crate) fn refresh_display(&self) {
+        let new_scale = self.display.scale_factor();
+        let old_scale = self.scale.replace(new_scale);
+        if old_scale != new_scale {
+            // Native geometry stays in physical pixels when a display snapshot
+            // arrives after the configuration event.
+            let mut bounds = self.bounds.borrow_mut();
+            let ratio = old_scale / new_scale;
+            bounds.size = size(bounds.size.width * ratio, bounds.size.height * ratio);
+            bounds.origin *= ratio;
+        }
+        self.refresh_keyboard_overlap_device_px();
+        self.emit_resize_callback();
+        self.refresh_insets();
+        let mut callback = self.callbacks.borrow_mut().display_changed.take();
+        if let Some(ref mut callback) = callback {
+            callback();
+        }
+        self.callbacks.borrow_mut().display_changed = callback;
+    }
+
     fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
         let frames = self.frames.clone();
         Some(Rc::new(move || frames.request()))
@@ -479,9 +811,18 @@ impl OhosWindow {
     }
 
     pub(crate) fn draw_requested_frame(&self, frame_time: Instant) {
+        self.draw_frame(frame_time, FrameRequestSource::LocalSchedule);
+    }
+
+    pub(crate) fn draw_native_frame(&self, frame_time: Instant) {
+        self.draw_frame(frame_time, FrameRequestSource::NativeCallback);
+    }
+
+    fn draw_frame(&self, frame_time: Instant, signal_source: FrameRequestSource) {
         if self.closed.get()
             || !self.surface_available.get()
             || self.visibility.get() != WindowVisibility::Visible
+            || self.restore_pending.get()
         {
             return;
         }
@@ -496,6 +837,8 @@ impl OhosWindow {
                 // lifecycle demand to present again without another layout.
                 require_presentation: self.presentation.needs_presentation(),
                 force_render: self.force_render.replace(false),
+                signal_at: None,
+                signal_source,
             });
         }
         self.callbacks.borrow_mut().request_frame = callback;
@@ -512,13 +855,29 @@ impl OhosWindow {
             );
             return;
         }
-        self.maximized.set(status == 2);
-        self.fullscreen.set(status == 1);
-        self.update_visibility(if status == 3 {
-            WindowVisibility::Hidden
-        } else {
-            WindowVisibility::Visible
-        });
+        // Minimization changes visibility, not the mode to restore or persist.
+        if status == 3 {
+            self.update_visibility(WindowVisibility::Hidden);
+            return;
+        }
+        let was_maximized = self.maximized.replace(status == 2);
+        let was_fullscreen = self.fullscreen.replace(status == 1);
+        self.update_visibility(WindowVisibility::Visible);
+        if was_maximized != self.maximized.get() || was_fullscreen != self.fullscreen.get() {
+            self.notify_window_mode_changed();
+        }
+    }
+
+    fn notify_window_mode_changed(&self) {
+        if self.closed.get() || self.released.get() {
+            return;
+        }
+        // Native mode changes can finish after the resize event. GPUI observes
+        // bounds changes to refresh title-bar controls and persist the window mode.
+        self.viewport.reset();
+        self.emit_resize_callback();
+        self.force_render.set(true);
+        self.schedule_frame();
     }
 
     fn dispatch_input_with_callbacks(
@@ -550,10 +909,32 @@ impl OhosWindow {
         TouchId(raw_id)
     }
 
-    fn dispatch_raw_touch_point(&self, raw_id: i32, x: f32, y: f32, force: f32, phase: TouchPhase) {
+    fn dispatch_raw_touch_point(
+        &self,
+        raw_id: i32,
+        x: f32,
+        y: f32,
+        screen_position: (f32, f32),
+        force: f32,
+        phase: TouchPhase,
+    ) {
         if phase == TouchPhase::Started {
             self.invalidate_pending_edit();
         }
+        // XComponent's touch screen coordinates do not follow a moving window
+        // reliably. Resolve the local point against its current native origin.
+        let screen_position = match self.app.borrow().as_ref().and_then(|app| {
+            app.with_xcomponent_for(self.window_id, |component| {
+                component.raw().layout_position_in_screen()
+            })
+        }) {
+            Some(Ok(origin)) => (origin.x as f32 + x, origin.y as f32 + y),
+            Some(Err(error)) => {
+                warn!("Failed to locate OHOS touch surface: {error}");
+                screen_position
+            }
+            None => screen_position,
+        };
         let position = self.point_from_device_pixels(x, y);
         if phase == TouchPhase::Started {
             self.native_pointer_id.set(Some(raw_id));
@@ -562,6 +943,13 @@ impl OhosWindow {
             let id = self.allocate_touch_id();
             let mut active_touches = self.active_touches.borrow_mut();
             if active_touches.is_empty() {
+                self.primary_touch.set(Some(raw_id));
+                self.manipulation.set(None);
+                if let Some(subscription) = self.move_subscription.borrow().as_ref() {
+                    subscription.cancel();
+                }
+                self.pointer_screen_position.set(None);
+                self.record_screen_pointer(screen_position.0, screen_position.1);
                 self.touch_tap_candidates.borrow_mut().insert(
                     raw_id,
                     TouchTapCandidate {
@@ -584,6 +972,9 @@ impl OhosWindow {
             };
             id
         };
+        if self.primary_touch.get() == Some(raw_id) && phase == TouchPhase::Moved {
+            self.record_screen_pointer(screen_position.0, screen_position.1);
+        }
         self.pointer_position.set(Some(position));
         let should_reopen_keyboard = match phase {
             TouchPhase::Moved => {
@@ -607,28 +998,49 @@ impl OhosWindow {
             }
             TouchPhase::Started => false,
         };
-        // Native window geometry owns movement until release. Do not also pan
-        // a scrollable custom-titlebar parent while moving the native window.
-        let tap_allowed = if phase != TouchPhase::Moved || self.manipulation.get().is_none() {
-            self.touch_scroll.borrow_mut().relay(
-                TouchEvent {
-                    id,
-                    phase,
-                    position,
-                    predicted_position: None,
-                    force: force.is_finite().then(|| force.clamp(0.0, 1.0)),
-                },
-                Instant::now(),
-                |input| self.dispatch_input(input),
-            )
-        } else {
-            false
-        };
-        self.update_touch_long_press_timer();
-        self.request_touch_momentum_frame();
         if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
             self.active_touches.borrow_mut().remove(&raw_id);
+            if self.primary_touch.get() == Some(raw_id) {
+                self.primary_touch.set(None);
+                self.manipulation.set(None);
+                if let Some(subscription) = self.move_subscription.borrow().as_ref() {
+                    subscription.cancel();
+                }
+            }
         }
+        let now = Instant::now();
+        let tap_allowed = self.touch_scroll.borrow_mut().relay(
+            TouchEvent {
+                id,
+                phase,
+                position,
+                predicted_position: None,
+                force: force.is_finite().then(|| force.clamp(0.0, 1.0)),
+            },
+            now,
+            |input| {
+                // Geometry is already driven by absolute touch coordinates.
+                // A compatibility move must not restart the title-bar drag.
+                if matches!(input, PlatformInput::MouseMove(_)) && self.manipulation.get().is_some()
+                {
+                    crate::DispatchEventResult::default()
+                } else {
+                    self.dispatch_input(input)
+                }
+            },
+        );
+        if phase == TouchPhase::Started
+            && self.primary_touch.get() == Some(raw_id)
+            && matches!(self.hit_window_control(), Some(WindowControlArea::Drag))
+            && self
+                .touch_scroll
+                .borrow_mut()
+                .capture_window_control(id, now, |input| self.dispatch_input(input))
+        {
+            self.start_window_move();
+        }
+        self.update_touch_long_press_timer();
+        self.request_touch_momentum_frame();
         if should_reopen_keyboard && tap_allowed {
             // Focusing an already-focused GPUI input is otherwise a no-op.
             // OHOS can dismiss its IME without changing that focus, so an
@@ -680,6 +1092,11 @@ impl OhosWindow {
             .borrow_mut()
             .cancel(|input| self.dispatch_input(input));
         self.active_touches.borrow_mut().clear();
+        self.primary_touch.set(None);
+        self.manipulation.set(None);
+        if let Some(subscription) = self.move_subscription.borrow().as_ref() {
+            subscription.cancel();
+        }
         self.touch_tap_candidates.borrow_mut().clear();
     }
 
@@ -706,6 +1123,9 @@ impl OhosWindow {
     }
 
     fn dispatch_raw_touch_data(&self, event: &TouchEventData, point: &TouchPointData) {
+        if point.event_tool_type == TouchPointTool::Mouse {
+            return;
+        }
         let phase = match event.event_type {
             OhosTouchEvent::Down => TouchPhase::Started,
             OhosTouchEvent::Move => TouchPhase::Moved,
@@ -713,10 +1133,25 @@ impl OhosWindow {
             OhosTouchEvent::Cancel => TouchPhase::Cancelled,
             OhosTouchEvent::Unknown => return,
         };
-        self.dispatch_raw_touch_point(point.id, point.x, point.y, point.force, phase);
+        self.dispatch_raw_touch_point(
+            point.id,
+            point.x,
+            point.y,
+            (point.screen_x, point.screen_y),
+            point.force,
+            phase,
+        );
     }
 
     fn dispatch_raw_touch_event(&self, event: &TouchEventData) {
+        if !event.touch_points.is_empty()
+            && event
+                .touch_points
+                .iter()
+                .all(|point| point.event_tool_type == TouchPointTool::Mouse)
+        {
+            return;
+        }
         match event.event_type {
             OhosTouchEvent::Move | OhosTouchEvent::Cancel if !event.touch_points.is_empty() => {
                 for point in &event.touch_points {
@@ -732,7 +1167,14 @@ impl OhosWindow {
                     } else {
                         TouchPhase::Ended
                     };
-                    self.dispatch_raw_touch_point(event.id, event.x, event.y, event.force, phase);
+                    self.dispatch_raw_touch_point(
+                        event.id,
+                        event.x,
+                        event.y,
+                        (event.screen_x, event.screen_y),
+                        event.force,
+                        phase,
+                    );
                 }
             }
             OhosTouchEvent::Move | OhosTouchEvent::Cancel => {
@@ -741,7 +1183,14 @@ impl OhosWindow {
                 } else {
                     TouchPhase::Cancelled
                 };
-                self.dispatch_raw_touch_point(event.id, event.x, event.y, event.force, phase);
+                self.dispatch_raw_touch_point(
+                    event.id,
+                    event.x,
+                    event.y,
+                    (event.screen_x, event.screen_y),
+                    event.force,
+                    phase,
+                );
             }
             OhosTouchEvent::Unknown => {}
         }
@@ -777,26 +1226,261 @@ impl OhosWindow {
         }
     }
 
+    fn set_native_text_input_active(&self, active: bool) {
+        if !self.input_ready.get() {
+            return;
+        }
+        if let Some(app) = self.app.borrow().as_ref()
+            && let Err(error) =
+                app.set_text_input_active_for(self.window_id, active && self.surface_focused.get())
+        {
+            warn!("Failed to update OHOS text input focus: {error}");
+        }
+    }
+
+    fn restore_text_input(&self) {
+        if !self.active.get() || !self.input_ready.get() || !self.surface_focused.get() {
+            return;
+        }
+        let handler = self.input_handler.borrow_mut().take();
+        if let Some(mut handler) = handler {
+            let accepts_text = handler.query_accepts_text_input();
+            *self.input_handler.borrow_mut() = Some(handler);
+            if accepts_text {
+                self.request_keyboard();
+                self.schedule_ime_text_update();
+            }
+        }
+    }
+
     fn show_keyboard_if_needed(&self) {
-        if !self.keyboard_visible.get() {
+        if !self.keyboard_visible.get() && !self.ime_retry_pending.get() {
             self.request_keyboard();
         }
     }
 
     fn request_keyboard(&self) {
-        self.apply_ime_action();
-        if let Some(app) = self.app.borrow().as_ref() {
-            match app.try_show_keyboard_for(self.window_id) {
-                Ok(()) => self.keyboard_visible.set(true),
-                Err(error) => {
-                    self.keyboard_visible.set(false);
-                    warn!(
-                        "Failed to show OHOS IME for window {}: {error}",
+        self.set_native_text_input_active(true);
+        self.cancel_keyboard_retry();
+        // GPUI can focus an editor before its native window gains focus. Attaching
+        // here would send IME text to that editor while shortcuts reach the old window.
+        if !self.active.get() || !self.input_ready.get() || !self.surface_focused.get() {
+            return;
+        }
+        self.request_keyboard_attempt(0, self.ime_retry_generation.get(), true);
+    }
+
+    fn cancel_keyboard_retry(&self) {
+        self.ime_retry_pending.set(false);
+        self.ime_recovery_pending.set(false);
+        self.ime_retry_generation
+            .set(self.ime_retry_generation.get().wrapping_add(1));
+    }
+
+    fn request_keyboard_attempt(&self, attempt: usize, generation: u64, show_keyboard: bool) {
+        if self.ime_retry_generation.get() != generation
+            || self.released.get()
+            || self.closed.get()
+            || !self.active.get()
+            || !self.input_ready.get()
+            || !self.surface_focused.get()
+        {
+            return;
+        }
+        self.ime_retry_pending.set(false);
+        if show_keyboard {
+            self.apply_ime_action(false);
+        }
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        #[cfg(feature = "api-26")]
+        if openharmony_ability::sdk_api_version() >= 26
+            && let Err(error) = app.with_ime_for(self.window_id, |ime| {
+                ime.set_consume_key_events(true);
+            })
+        {
+            self.finish_keyboard_attempt(
+                attempt,
+                generation,
+                show_keyboard,
+                Err(error.to_string()),
+            );
+            return;
+        }
+        let result = if show_keyboard {
+            app.try_show_keyboard_for(self.window_id)
+        } else {
+            app.try_attach_ime_for(self.window_id)
+        };
+        self.finish_keyboard_attempt(
+            attempt,
+            generation,
+            show_keyboard,
+            result.map_err(|error| error.to_string()),
+        );
+    }
+
+    fn finish_keyboard_attempt(
+        &self,
+        attempt: usize,
+        generation: u64,
+        show_keyboard: bool,
+        result: Result<(), String>,
+    ) {
+        match result {
+            Ok(()) => {
+                self.ime_recovery_pending.set(false);
+                if show_keyboard {
+                    self.keyboard_visible.set(true);
+                }
+                if attempt > 0 || !show_keyboard {
+                    info!(
+                        "OHOS IME attached for window {} after retry {attempt}",
                         self.window_id
                     );
                 }
+                self.apply_ime_action(true);
+                self.schedule_ime_text_update();
+            }
+            Err(error) => {
+                if show_keyboard {
+                    self.keyboard_visible.set(false);
+                }
+                warn!(
+                    "Failed to attach OHOS IME for window {} (attempt {}): {error}",
+                    self.window_id,
+                    attempt.saturating_add(1),
+                );
+                // First-boot IME startup can outlast the fast retries. Keep
+                // recovering while focused, backing off to avoid repeated IPC stalls.
+                let delay = [250, 1000, 2000, 5000, 10000]
+                    .get(attempt)
+                    .copied()
+                    .unwrap_or(30000);
+                let Some(window) = self
+                    .window_index
+                    .upgrade()
+                    .and_then(|index| index.borrow().get(&self.window_id).cloned())
+                else {
+                    return;
+                };
+                self.ime_retry_pending.set(true);
+                self.foreground_executor
+                    .spawn(async move {
+                        smol::Timer::after(Duration::from_millis(delay)).await;
+                        let Some(window) = window.upgrade() else {
+                            return;
+                        };
+                        let window = window.borrow();
+                        if window.released.get()
+                            || window.closed.get()
+                            || !window.active.get()
+                            || !window.input_ready.get()
+                            || !window.surface_focused.get()
+                            || window.ime_retry_generation.get() != generation
+                        {
+                            return;
+                        }
+                        window.ime_retry_pending.set(false);
+                        let handler = window.input_handler.borrow_mut().take();
+                        let Some(mut handler) = handler else {
+                            return;
+                        };
+                        let accepts_text = handler.query_accepts_text_input();
+                        *window.input_handler.borrow_mut() = Some(handler);
+                        if accepts_text && window.ime_retry_generation.get() == generation {
+                            window.request_keyboard_attempt(
+                                attempt.saturating_add(1),
+                                generation,
+                                show_keyboard,
+                            );
+                        }
+                    })
+                    .detach();
             }
         }
+    }
+
+    fn update_ime(&self, recover: bool, update: impl FnOnce(&IME) -> ImeResult<()>) {
+        let Some(app) = self.app.borrow().clone() else {
+            return;
+        };
+        match app.with_ime_for(self.window_id, update) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                warn!(
+                    "Failed to update OHOS IME for window {}: {error}",
+                    self.window_id
+                );
+                // DETACHED and CLIENT_NOT_EDITABLE invalidate the binding's proxy.
+                // Other errors cannot be repaired by taking ownership of the IME.
+                if recover && matches!(error.code(), 12_800_009 | 12_800_016) {
+                    self.schedule_ime_recovery();
+                }
+            }
+            Err(error) => warn!(
+                "OHOS IME unavailable for window {}: {error}",
+                self.window_id
+            ),
+        }
+    }
+
+    fn schedule_ime_recovery(&self) {
+        if self.ime_recovery_pending.replace(true) {
+            return;
+        }
+        let generation = self.ime_retry_generation.get();
+        let Some(window) = self
+            .window_index
+            .upgrade()
+            .and_then(|index| index.borrow().get(&self.window_id).cloned())
+        else {
+            self.ime_recovery_pending.set(false);
+            return;
+        };
+        // Cursor notifications run during GPUI rendering. Query text focus only
+        // after that borrow ends, and never let a stale window reclaim the IME.
+        self.foreground_executor
+            .spawn(async move {
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
+                let window = window.borrow();
+                if window.ime_retry_generation.get() != generation {
+                    return;
+                }
+                if window.released.get()
+                    || window.closed.get()
+                    || !window.active.get()
+                    || !window.input_ready.get()
+                    || !window.surface_focused.get()
+                {
+                    window.ime_recovery_pending.set(false);
+                    return;
+                }
+                let handler = window.input_handler.borrow_mut().take();
+                let Some(mut handler) = handler else {
+                    window.ime_recovery_pending.set(false);
+                    return;
+                };
+                let accepts_text = handler.query_accepts_text_input();
+                *window.input_handler.borrow_mut() = Some(handler);
+                if accepts_text && window.ime_retry_generation.get() == generation {
+                    let show_keyboard = window.keyboard_visible.get();
+                    info!(
+                        "Recovering OHOS IME for window {} (show_keyboard={show_keyboard})",
+                        window.window_id
+                    );
+                    if show_keyboard {
+                        window.ime_recovery_pending.set(false);
+                    }
+                    window.request_keyboard_attempt(0, generation, show_keyboard);
+                } else if window.ime_retry_generation.get() == generation {
+                    window.ime_recovery_pending.set(false);
+                }
+            })
+            .detach();
     }
 
     fn configure_text_input(&self, configuration: TextInputConfiguration) {
@@ -804,28 +1488,11 @@ impl OhosWindow {
         // OhosWindow. The native editor also retains hints while detached.
         // The SDK has no autocorrect, capitalization, or suggestion flags.
         if self.ime_action.replace(configuration.input_action) != configuration.input_action {
-            self.apply_ime_action();
+            self.apply_ime_action(true);
         }
     }
 
-    fn focus_native_surface(&self) {
-        if !self.active.get() || !self.surface_available.get() {
-            return;
-        }
-        // Release the app's component lock before changing ArkUI focus.
-        let component = self
-            .app
-            .borrow()
-            .as_ref()
-            .and_then(|app| app.with_xcomponent_for(self.window_id, Clone::clone));
-        if let Some(component) = component
-            && let Err(error) = component.set_focus_status(true)
-        {
-            warn!("Failed to focus OHOS render surface: {error}");
-        }
-    }
-
-    fn apply_ime_action(&self) {
+    fn apply_ime_action(&self, recover: bool) {
         let action = self.ime_action.get();
         let enter_key = match action {
             TextInputAction::Unspecified => EnterKey::Unspecified,
@@ -842,21 +1509,13 @@ impl OhosWindow {
         } else {
             InputType::Text
         };
-        if let Some(app) = self.app.borrow().as_ref() {
-            match app.configure_ime_for(self.window_id, enter_key, input_type) {
-                Ok(()) => info!(
-                    "OHOS IME configured window={} action={action:?}",
-                    self.window_id
-                ),
-                Err(error) => warn!(
-                    "Failed to configure OHOS IME for window {}: {error}",
-                    self.window_id
-                ),
-            }
-        }
+        self.update_ime(recover, |ime| {
+            ime.try_update_configuration(enter_key, input_type)
+        });
     }
 
     fn hide_keyboard_if_needed(&self) {
+        self.cancel_keyboard_retry();
         if self.keyboard_visible.replace(false)
             && let Some(app) = self.app.borrow().as_ref()
         {
@@ -864,8 +1523,28 @@ impl OhosWindow {
         }
     }
 
+    fn detach_ime(&self) {
+        if let Some(app) = self.app.borrow().as_ref()
+            && let Err(error) = app.try_detach_ime_for(self.window_id)
+        {
+            warn!(
+                "Failed to detach OHOS IME for window {}: {error}",
+                self.window_id
+            );
+        }
+    }
+
+    fn finish_native_keyboard_show(&self) {
+        self.cancel_keyboard_retry();
+        self.keyboard_visible.set(true);
+    }
+
     fn notify_keyboard_hidden_by_user_if_needed(&self) {
-        self.keyboard_visible.set(false);
+        // A hide during pending recovery changes what we restore, but hardware
+        // text input must still regain its connection without showing a keyboard.
+        if self.keyboard_visible.replace(false) && !self.ime_recovery_pending.get() {
+            self.cancel_keyboard_retry();
+        }
     }
 
     fn keyboard_inset_for_overlap(&self, overlap_device_px: i32) -> Pixels {
@@ -1102,6 +1781,7 @@ impl OhosWindow {
 
     fn update_visibility(&self, next: WindowVisibility) {
         if next != WindowVisibility::Visible {
+            self.cancel_activation();
             self.cancel_touch_input();
             self.presentation.request();
         }
@@ -1122,17 +1802,47 @@ impl OhosWindow {
     }
 
     fn set_hovered(&self, hovered: bool) {
+        if !hovered {
+            // XComponent can lose the release after the pointer leaves its window.
+            // Cancel the press before an unpressed re-entry can move the window.
+            self.cancel_mouse_input();
+        }
         if self.hovered.replace(hovered) == hovered {
             return;
         }
         if hovered {
             self.cursor_style.set(None);
+        } else {
+            self.dispatch_input(PlatformInput::MouseExited(MouseExitEvent {
+                position: self.mouse_position(),
+                pressed_button: None,
+                modifiers: self.key_state.borrow().modifiers(),
+            }));
         }
         let mut callback = self.callbacks.borrow_mut().hover_status_change.take();
         if let Some(ref mut callback) = callback {
             callback(hovered);
         }
         self.callbacks.borrow_mut().hover_status_change = callback;
+    }
+
+    fn cancel_mouse_input(&self) {
+        if self.primary_touch.get().is_none() {
+            self.manipulation.set(None);
+            if let Some(subscription) = self.move_subscription.borrow().as_ref() {
+                subscription.cancel();
+            }
+            self.geometry_request.borrow_mut().take();
+        }
+        self.mouse_click.borrow_mut().take();
+        if let Some(button) = self.pressed_mouse_button.take() {
+            self.dispatch_input(PlatformInput::MouseUp(MouseUpEvent {
+                button,
+                position: point(px(-1.), px(-1.)),
+                modifiers: self.key_state.borrow().modifiers(),
+                click_count: 0,
+            }));
+        }
     }
 
     fn window_client(&self) -> Option<WindowClient> {
@@ -1149,14 +1859,15 @@ impl OhosWindow {
     fn record_screen_pointer(&self, x: f32, y: f32) {
         if x.is_finite() && y.is_finite() {
             let pointer = (x.round() as i64, y.round() as i64);
-            self.pointer_screen_position.set(Some(pointer));
-            self.update_manipulation(pointer);
+            if self.pointer_screen_position.replace(Some(pointer)) != Some(pointer) {
+                self.update_manipulation(pointer);
+            }
         }
     }
 
     fn begin_manipulation(&self, edge: Option<ResizeEdge>) {
         if self.closed.get()
-            || self.maximized.get()
+            || (edge.is_some() && self.maximized.get())
             || self.fullscreen.get()
             || (edge.is_some() && !self.is_resizable)
             || (edge.is_none() && !self.is_movable)
@@ -1184,6 +1895,16 @@ impl OhosWindow {
         let Some(session) = self.manipulation.get() else {
             return;
         };
+        if self.primary_touch.get().is_some()
+            && (pointer.0.saturating_sub(session.pointer.0) as f64)
+                .hypot(pointer.1.saturating_sub(session.pointer.1) as f64)
+                > f64::from(GestureTuning::default().touch_slop * self.scale_factor())
+        {
+            self.touch_scroll.borrow_mut().cancel_window_control_click();
+        }
+        if session.edge.is_none() {
+            return;
+        }
         let minimum = self
             .min_size
             .map(|size| {
@@ -1257,6 +1978,22 @@ impl OhosWindow {
         if !self.maximized.get() && !self.fullscreen.get() {
             self.floating_state.set(self.current_native_state());
         }
+    }
+
+    async fn recover_floating_window(
+        client: &WindowClient,
+        window_id: i64,
+        floating_state: Option<super::window_state::NativeWindowState>,
+    ) -> napi_ohos::Result<()> {
+        client.recover_window(window_id).await?;
+        if let Some(state) = floating_state {
+            // OHOS can snapshot the previous position before an awaited move is
+            // reflected in window properties. Retain GPUI's saved floating position.
+            client
+                .move_window_to(window_id, state.left, state.top)
+                .await?;
+        }
+        Ok(())
     }
 
     fn apply_requested_background(&self) {
@@ -1398,8 +2135,16 @@ impl OhosWindow {
         let maximized = self.maximized.clone();
         let pending = self.restore_pending.clone();
         let requests = self.restore_state.clone();
+        let mode_operations = self.mode_operations.clone();
+        let window = self
+            .window_index
+            .upgrade()
+            .and_then(|index| index.borrow().get(&window_id).cloned());
         self.foreground_executor
             .spawn(async move {
+                // GPUI applies the saved mode before Zed supplies native geometry.
+                // Keep that transition and this entire restore sequence from interleaving.
+                let _operation = mode_operations.lock().await;
                 loop {
                     let Some(state) = requests.borrow_mut().take() else {
                         break;
@@ -1429,11 +2174,42 @@ impl OhosWindow {
                         Ok(()) => {
                             fullscreen.set(state.fullscreen);
                             maximized.set(state.maximized && !state.fullscreen);
+                            if let Some(window) = window.as_ref().and_then(Weak::upgrade) {
+                                let window = window.borrow();
+                                window.floating_state.set(Some(
+                                    super::window_state::NativeWindowState {
+                                        maximized: false,
+                                        fullscreen: false,
+                                        ..state
+                                    },
+                                ));
+                            }
                         }
                         Err(error) => warn!("Failed to restore OHOS native window state: {error}"),
                     }
                 }
                 pending.set(false);
+                if let Some(window) = window.and_then(|window| window.upgrade()) {
+                    let window = window.borrow();
+                    let content_rect = window
+                        .app
+                        .borrow()
+                        .as_ref()
+                        .map(|app| app.content_rect_for(window_id));
+                    if let Some(rect) = content_rect
+                        && rect.width > 1
+                        && rect.height > 1
+                    {
+                        let scale = window.scale_factor();
+                        window.bounds.borrow_mut().size = size(
+                            px(rect.width as f32 / scale),
+                            px(rect.height as f32 / scale),
+                        );
+                    }
+                    window.refresh_keyboard_overlap_device_px();
+                    window.notify_window_mode_changed();
+                    window.refresh_insets();
+                }
             })
             .detach();
     }
@@ -1472,6 +2248,13 @@ impl OhosWindow {
 
     fn request_map(&self) -> Result<()> {
         anyhow::ensure!(!self.closed.get(), "Cannot map a closed OHOS window");
+        // GPUI maps every window during construction, including hidden windows.
+        // Starting a workspace Ability here would show it before Zed is ready.
+        if !self.show_on_creation {
+            return Ok(());
+        }
+        self.visibility.set(WindowVisibility::Visible);
+        self.sync_frame_delivery();
         let client = self
             .window_client()
             .ok_or_else(|| anyhow::anyhow!("OHOS window bridge is unavailable"))?;
@@ -1507,19 +2290,15 @@ impl OhosWindow {
     }
 
     fn restore_cursor_after_move(&self) {
-        if !self.cursor_hidden_until_move.replace(false) {
-            return;
-        }
-        let Some(client) = self.window_client() else {
+        let Some(app) = self.app.borrow().clone() else {
             return;
         };
-        self.foreground_executor
-            .spawn(async move {
-                if let Err(error) = client.set_cursor_visible(true).await {
-                    warn!("Failed to restore OHOS cursor: {error}");
-                }
-            })
-            .detach();
+        super::platform::set_cursor_visibility(
+            &self.cursor_visibility,
+            true,
+            app,
+            &self.foreground_executor,
+        );
     }
 
     fn effective_content_size(&self) -> Size<Pixels> {
@@ -1535,6 +2314,9 @@ impl OhosWindow {
     }
 
     fn emit_resize_callback(&self) {
+        if self.restore_pending.get() {
+            return;
+        }
         let scale = *self.scale.borrow();
         let bounds_size = self.bounds.borrow().size;
         let content_size = self.effective_content_size();
@@ -1601,15 +2383,22 @@ impl OhosWindow {
         );
 
         // Update window bounds to match actual content_rect (convert device px -> logical px)
-        if content_rect.width > 0 && content_rect.height > 0 {
+        if content_rect.width > 0 && content_rect.height > 0 && !self.restore_pending.get() {
             let logical_size = size(
                 px(device_width as f32 / scale),
                 px(device_height as f32 / scale),
             );
-            let logical_origin = point(
-                px(content_rect.left as f32 / scale),
-                px(content_rect.top as f32 / scale),
-            );
+            let window_rect = app_ref.window_rect_for(self.window_id);
+            // The XComponent origin is relative to its window. Surface creation
+            // can follow the window's last move event, so retain its screen origin.
+            let logical_origin = if window_rect.width > 0 && window_rect.height > 0 {
+                point(
+                    px((window_rect.left + content_rect.left) as f32 / scale),
+                    px((window_rect.top + content_rect.top) as f32 / scale),
+                )
+            } else {
+                self.bounds.borrow().origin
+            };
             *self.bounds.borrow_mut() = Bounds::new(logical_origin, logical_size);
         }
 
@@ -1655,6 +2444,10 @@ impl OhosWindow {
         // Zed can open its first window after SurfaceCreate was already delivered.
         // Bootstrap frame delivery from the native surface initialized above.
         self.surface_available.set(true);
+        drop(renderer_guard);
+        drop(app);
+        // The first GPUI window can miss both SurfaceCreate and native focus events.
+        self.focus_native_surface();
         self.sync_frame_delivery();
         self.force_render.set(true);
         self.schedule_frame();
@@ -1677,13 +2470,23 @@ impl OhosWindow {
             self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Ended));
         }
         match event {
+            Event::TextInputReadyChanged { window_id, ready } if *window_id == self.window_id => {
+                debug!("OhosWindow: native input ready={ready} for window {window_id}");
+                // A new editor lifetime invalidates retries for its predecessor.
+                self.input_ready.set(*ready);
+                self.cancel_keyboard_retry();
+                self.keyboard_visible.set(false);
+                if *ready {
+                    self.apply_ime_action(true);
+                    self.restore_text_input();
+                }
+            }
             Event::SurfaceCreate => {
                 self.surface_available.set(true);
                 self.cursor_style.set(None);
                 self.sync_frame_delivery();
                 debug!("OhosWindow: SurfaceCreate event received - initializing renderer");
-                // A recreated render surface owns a new native editor.
-                self.apply_ime_action();
+                self.focus_native_surface();
                 self.request_decorations(self.requested_decorations.get());
                 self.apply_window_options();
                 self.background_generation
@@ -1711,19 +2514,27 @@ impl OhosWindow {
                 }
                 self.emit_resize_callback();
                 self.refresh_insets();
-                // Activation can precede XComponent creation on cold start.
                 self.focus_native_surface();
+                if self.activation_pending.get() {
+                    self.activate();
+                }
             }
             Event::SurfaceDestroy => {
+                self.cancel_activation();
+                self.cancel_keyboard_retry();
                 self.cancel_touch_input();
                 self.presentation.request();
                 self.surface_available.set(false);
+                self.input_ready.set(false);
                 self.sync_frame_delivery();
                 self.background_generation
                     .set(self.background_generation.get().wrapping_add(1));
                 self.background_pending.set(false);
                 self.native_drag.borrow_mut().take();
                 self.manipulation.set(None);
+                if let Some(subscription) = self.move_subscription.borrow().as_ref() {
+                    subscription.cancel();
+                }
                 self.geometry_request.borrow_mut().take();
                 if self.incoming_drag.replace(false) {
                     self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Exited));
@@ -1742,11 +2553,16 @@ impl OhosWindow {
                 // former includes the server-side title bar, while the native render surface does
                 // not. Prefer the active XComponent rect whenever it is available so that the
                 // renderer and GPUI viewport always use the drawable content size.
-                let content_rect = self
+                let (content_rect, window_rect) = self
                     .app
                     .borrow()
                     .as_ref()
-                    .map(|app| app.content_rect_for(self.window_id))
+                    .map(|app| {
+                        (
+                            app.content_rect_for(self.window_id),
+                            app.window_rect_for(self.window_id),
+                        )
+                    })
                     .unwrap_or_default();
                 let device_width = if content_rect.width > 0 {
                     content_rect.width
@@ -1768,9 +2584,6 @@ impl OhosWindow {
                 let width = device_width as f32;
                 let height = device_height as f32;
                 let new_size = size(px(width / scale), px(height / scale));
-                let origin = self.bounds.borrow().origin;
-                *self.bounds.borrow_mut() = Bounds::new(origin, new_size);
-                let overlap_changed = self.refresh_keyboard_overlap_device_px();
 
                 // Update renderer's drawable size
                 if let Some(ref mut renderer) = *self.renderer.borrow_mut() {
@@ -1780,6 +2593,23 @@ impl OhosWindow {
                     };
                     renderer.update_drawable_size(device_size);
                 }
+                // Native recover/resize/maximize can briefly expose a 1x1 surface.
+                // Publishing it during restoration permanently collapses Zed's docks.
+                if self.restore_pending.get() {
+                    return;
+                }
+                // Hiding native decorations also moves the content origin without
+                // moving the native window, so a surface resize must refresh both.
+                let origin = if window_rect.width > 0 && window_rect.height > 0 {
+                    point(
+                        px((window_rect.left + content_rect.left) as f32 / scale),
+                        px((window_rect.top + content_rect.top) as f32 / scale),
+                    )
+                } else {
+                    self.bounds.borrow().origin
+                };
+                *self.bounds.borrow_mut() = Bounds::new(origin, new_size);
+                let overlap_changed = self.refresh_keyboard_overlap_device_px();
                 if overlap_changed {
                     self.emit_visual_viewport_changed();
                 } else {
@@ -1833,13 +2663,19 @@ impl OhosWindow {
             #[cfg(not(feature = "native-vsync"))]
             Event::WindowRedraw(_) => {
                 self.frames.on_xcomponent_callback();
-                self.draw_requested_frame(Instant::now());
+                self.draw_native_frame(Instant::now());
             }
             Event::Input(input_event) => {
                 self.handle_input_event(input_event);
             }
             Event::WindowFocusChanged { window_id, focused } => {
+                if *focused {
+                    self.cancel_activation();
+                }
                 let next = *focused && *window_id == self.window_id;
+                if next {
+                    self.update_visibility(WindowVisibility::Visible);
+                }
                 if let Some(adapter) = self.a11y_adapter.borrow().as_ref()
                     && let Err(error) = adapter.set_host_focus_state(next)
                 {
@@ -1873,15 +2709,7 @@ impl OhosWindow {
                     // GPUI can retain the editor's focus while another native
                     // window owns the process-wide IME. Returning to this window
                     // must reattach its editor even without a GPUI FocusGained.
-                    let handler = self.input_handler.borrow_mut().take();
-                    if let Some(mut handler) = handler {
-                        let accepts_text = handler.query_accepts_text_input();
-                        *self.input_handler.borrow_mut() = Some(handler);
-                        if accepts_text {
-                            self.request_keyboard();
-                            self.schedule_ime_text_update();
-                        }
-                    }
+                    self.restore_text_input();
                 }
             }
             Event::ConfigChanged(configuration) => {
@@ -1890,19 +2718,10 @@ impl OhosWindow {
                     .get()
                     .unwrap_or_else(|| appearance_for_color_mode(configuration.color_mode));
                 self.set_appearance(appearance);
-                let new_scale = self.display.scale_factor();
-                let old_scale = self.scale.replace(new_scale);
-                if old_scale != new_scale {
-                    let mut bounds = self.bounds.borrow_mut();
-                    let ratio = old_scale / new_scale;
-                    bounds.size = size(bounds.size.width * ratio, bounds.size.height * ratio);
-                    bounds.origin *= ratio;
-                }
-                self.refresh_keyboard_overlap_device_px();
-                self.emit_resize_callback();
-                self.refresh_insets();
+                self.refresh_display();
             }
             Event::WindowDestroy => {
+                self.cancel_keyboard_retry();
                 if self.closed.replace(true) {
                     return;
                 }
@@ -1923,7 +2742,7 @@ impl OhosWindow {
                 if *height <= 0 {
                     self.notify_keyboard_hidden_by_user_if_needed();
                 } else {
-                    self.keyboard_visible.set(true);
+                    self.finish_native_keyboard_show();
                 }
                 if self.refresh_keyboard_overlap_device_px() {
                     self.emit_visual_viewport_changed();
@@ -1943,298 +2762,187 @@ impl OhosWindow {
         let pending = self.ime_text_update_pending.clone();
         let input_handler = self.input_handler.clone();
         let window_id = self.window_id;
+        let window = self
+            .window_index
+            .upgrade()
+            .and_then(|index| index.borrow().get(&window_id).cloned());
         self.foreground_executor
             .spawn(async move {
                 pending.set(false);
                 // A queued snapshot can outlive a child window close. Avoid
-                // querying GPUI's handler after its native surface is gone.
-                if app.native_window_for(window_id).is_none() {
+                // querying GPUI's handler after its native editor is gone.
+                if !app.is_text_input_ready_for(window_id) {
                     return;
                 }
                 let state = {
                     let Ok(mut guard) = input_handler.try_borrow_mut() else {
                         return;
                     };
-                    let Some(handler) = guard.as_mut() else {
-                        return;
-                    };
-                    let Some(selection) = handler.selected_text_range(true) else {
-                        return;
-                    };
-                    let caret = if selection.reversed {
-                        selection.range.start
-                    } else {
-                        selection.range.end
-                    };
-                    // Fetch bounded context, including one extra unit to detect
-                    // documents exceeding the native selection-notification limit.
-                    let start = if caret <= 8192 {
-                        0
-                    } else {
-                        caret.saturating_sub(4096)
-                    };
-                    let mut adjusted = None;
-                    let Some(text) =
-                        handler.text_for_range(start..start.saturating_add(8193), &mut adjusted)
-                    else {
-                        return;
-                    };
-                    TextState {
-                        text,
-                        offset: adjusted.map_or(start, |range| range.start),
-                        selection: selection.range,
-                        reversed: selection.reversed,
-                    }
+                    let snapshot = (|| {
+                        let handler = guard.as_mut()?;
+                        let selection = handler.selected_text_range(true)?;
+                        let caret = if selection.reversed {
+                            selection.range.start
+                        } else {
+                            selection.range.end
+                        };
+                        // Fetch bounded context, including one extra unit to detect
+                        // documents exceeding the native selection-notification limit.
+                        let start = if caret <= 8192 {
+                            0
+                        } else {
+                            caret.saturating_sub(4096)
+                        };
+                        let mut adjusted = None;
+                        let text = handler
+                            .text_for_range(start..start.saturating_add(8193), &mut adjusted)?;
+                        Some(TextState {
+                            text,
+                            offset: adjusted.map_or(start, |range| range.start),
+                            selection: selection.range,
+                            reversed: selection.reversed,
+                        })
+                    })();
+                    // Clear the previous field's context when the new handler
+                    // provides no document text.
+                    snapshot.unwrap_or_default()
                 };
-                if app.native_window_for(window_id).is_some()
-                    && let Err(error) = app.update_ime_text_state_for(window_id, state)
+                if app.is_text_input_ready_for(window_id)
+                    && let Some(window) = window.and_then(|window| window.upgrade())
                 {
-                    warn!("Failed to update OHOS IME text for window {window_id}: {error}");
+                    window
+                        .borrow()
+                        .update_ime(true, |ime| ime.try_update_text_state(state));
                 }
             })
             .detach();
     }
 
     pub(crate) fn handle_input_event(&self, event: &InputEvent) {
+        let pointer_activation = match event {
+            InputEvent::XComponent(XComponentInputEvent::Mouse(event)) => {
+                event.action == MouseAction::Press
+            }
+            InputEvent::XComponent(XComponentInputEvent::Touch(event)) => {
+                event.event_type == OhosTouchEvent::Down
+            }
+            InputEvent::ArkUi(ArkUiInputEvent::Pointer(event)) => {
+                event.action == UIInputAction::Down
+            }
+            _ => false,
+        };
+        if pointer_activation {
+            // A click on the already-active window produces no focus-change
+            // event, but still supersedes activation of another pending window.
+            self.cancel_other_activations();
+        }
+        let activates_window = pointer_activation
+            || match event {
+                InputEvent::XComponent(XComponentInputEvent::Key(event)) => {
+                    event.action == KeyAction::Down
+                }
+                InputEvent::ArkUi(ArkUiInputEvent::Key(event)) => event.action == KeyAction::Down,
+                _ => false,
+            };
+        if activates_window && !self.active.get() {
+            // OHOS can deliver the activating press before WINDOW_ACTIVE. Actions
+            // dispatched by that press must already see this as the active window.
+            let windows = self
+                .windows
+                .upgrade()
+                .map(|windows| {
+                    windows
+                        .borrow()
+                        .iter()
+                        .filter_map(Weak::upgrade)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            for window in windows {
+                window.borrow().handle_event(&Event::WindowFocusChanged {
+                    window_id: self.window_id,
+                    focused: true,
+                });
+            }
+        }
         match event {
+            InputEvent::ArkUi(ArkUiInputEvent::FocusChanged(focused)) => {
+                if self.surface_focused.replace(*focused) == *focused {
+                    return;
+                }
+                self.invalidate_pending_edit();
+                if *focused {
+                    self.restore_text_input();
+                    // ArkUI popups change focus outside GPUI's input dispatch.
+                    // Rebuild cached views when the native surface regains focus.
+                    self.force_render.set(true);
+                    self.schedule_frame();
+                } else {
+                    // A native popup can take node focus while the window stays active.
+                    // Keeping the IME attached sends its Enter/arrow/text callbacks to
+                    // the editor underneath the menu instead of to ArkUI.
+                    self.set_native_text_input_active(false);
+                    self.hide_keyboard_if_needed();
+                    self.detach_ime();
+                    let change = self.key_state.borrow_mut().clear_pressed();
+                    if let Some(change) = change {
+                        self.dispatch_input(change);
+                    }
+                }
+            }
             InputEvent::Ime(ime_event) => {
+                if !self.surface_focused.get() {
+                    return;
+                }
+                if !matches!(ime_event, ImeEvent::ImeStatusEvent(_)) {
+                    // GPUI installs the focused input handler during paint. IME
+                    // edits bypass dispatch_key_event's dirty-frame refresh, so
+                    // complete it before borrowing the handler from the last frame.
+                    let was_deferred = self.defer_presentation.replace(true);
+                    self.draw_requested_frame(Instant::now());
+                    self.defer_presentation.set(was_deferred);
+                }
                 if let ImeEvent::ExtendActionEvent(action) = ime_event {
-                    let editing = self.text_editing();
-                    let action = *action;
-                    let expected_generation = editing.edit_generation.get();
-                    // Keep command ordering with queued selection/text callbacks.
-                    self.foreground_executor
-                        .spawn(async move {
-                            if editing.edit_generation.get() == expected_generation
-                                && editing.app.borrow().as_ref().is_some_and(|app| {
-                                    app.native_window_for(editing.window_id).is_some()
-                                })
-                            {
-                                editing.dispatch_edit_action(action);
-                            }
-                        })
-                        .detach();
+                    self.text_editing().dispatch_edit_action(*action);
                     self.schedule_ime_text_update();
                     return;
                 }
                 if !matches!(ime_event, ImeEvent::ImeStatusEvent(_)) {
                     self.invalidate_pending_edit();
                 }
-                if matches!(
-                    ime_event,
-                    ImeEvent::ImeStatusEvent(openharmony_ability::ime::KeyboardStatus::Hide)
-                ) {
-                    self.notify_keyboard_hidden_by_user_if_needed();
+                if let ImeEvent::ImeStatusEvent(status) = ime_event {
+                    match status {
+                        openharmony_ability::ime::KeyboardStatus::Hide => {
+                            self.notify_keyboard_hidden_by_user_if_needed();
+                        }
+                        openharmony_ability::ime::KeyboardStatus::Show => {
+                            self.finish_native_keyboard_show();
+                        }
+                        _ => {}
+                    }
                     if self.refresh_keyboard_overlap_device_px() {
                         self.emit_visual_viewport_changed();
                     }
                 }
 
-                let handler_ref = self.input_handler.clone();
-                let callbacks = self.callbacks.clone();
-                let ime_event = ime_event.clone();
-                let executor = self.foreground_executor.clone();
-
-                executor
-                    .spawn(async move {
-                        if let ImeEvent::MoveCursorEvent(direction) = ime_event {
-                            let key = match direction {
-                                ImeDirection::Up => "up",
-                                ImeDirection::Down => "down",
-                                ImeDirection::Left => "left",
-                                ImeDirection::Right => "right",
-                                ImeDirection::None => return,
-                            };
-                            Self::dispatch_input_with_callbacks(
-                                &callbacks,
-                                PlatformInput::KeyDown(KeyDownEvent {
-                                    keystroke: Keystroke {
-                                        key: key.into(),
-                                        key_char: None,
-                                        modifiers: Modifiers::default(),
-                                    },
-                                    is_held: false,
-                                    prefer_character_input: false,
-                                }),
-                            );
-                            return;
-                        }
-                        if let ImeEvent::EnterEvent(action) = ime_event {
-                            if let Some(handler) = handler_ref.borrow_mut().as_mut() {
-                                handler.unmark_text();
-                            }
-                            // Confirm keys must reach application key bindings;
-                            // Search/Send/Next must not silently insert a newline.
-                            let result = Self::dispatch_input_with_callbacks(
-                                &callbacks,
-                                PlatformInput::KeyDown(KeyDownEvent {
-                                    keystroke: Keystroke {
-                                        key: "enter".into(),
-                                        key_char: None,
-                                        modifiers: Modifiers::default(),
-                                    },
-                                    is_held: false,
-                                    prefer_character_input: false,
-                                }),
-                            );
-                            if result.propagate
-                                && matches!(
-                                    EnterKey::from(action as u32),
-                                    EnterKey::Newline | EnterKey::Unspecified
-                                )
-                                && let Some(handler) = handler_ref.borrow_mut().as_mut()
-                            {
-                                handler.replace_text_in_range(None, "\n");
-                            }
-                            return;
-                        }
-                        let mut handler_guard = handler_ref.borrow_mut();
-                        let Some(handler) = handler_guard.as_mut() else {
-                            return;
-                        };
-
-                        match ime_event {
-                            ImeEvent::TextInputEvent(data) => {
-                                handler.replace_text_in_range(None, &data.text);
-                                handler.unmark_text();
-                            }
-                            ImeEvent::PreviewTextEvent { text, start, end } => {
-                                let range = (start >= 0 && end >= start)
-                                    .then_some(start as usize..end as usize);
-                                handler.replace_and_mark_text_in_range(range, &text, None);
-                            }
-                            ImeEvent::FinishPreviewEvent => handler.unmark_text(),
-                            ImeEvent::EnterEvent(_) => unreachable!("confirm key handled above"),
-                            ImeEvent::MoveCursorEvent(_) => {
-                                unreachable!("cursor key handled above")
-                            }
-                            ImeEvent::ExtendActionEvent(_) => {
-                                unreachable!("edit command handled above")
-                            }
-                            ImeEvent::SelectionEvent { start, end } => {
-                                if start >= 0 && end >= 0 {
-                                    handler.unmark_text();
-                                    handler.set_selected_text_range(
-                                        start.min(end) as usize..start.max(end) as usize,
-                                    );
-                                }
-                            }
-                            ImeEvent::BackspaceEvent(len) | ImeEvent::DeleteForwardEvent(len) => {
-                                let forward = matches!(ime_event, ImeEvent::DeleteForwardEvent(_));
-                                let len = (len).max(0) as usize;
-                                if len == 0 {
-                                    return;
-                                }
-
-                                let selection = handler.selected_text_range(true);
-                                let has_editable_text =
-                                    selection.as_ref().is_some_and(|selection| {
-                                        handler
-                                            .text_for_range(selection.range.clone(), &mut None)
-                                            .is_some()
-                                    });
-                                if !has_editable_text {
-                                    // Terminals expose an IME cursor without editable backing text.
-                                    // Let their key handlers encode deletion for the PTY.
-                                    // Dispatch can re-enter input handling, so release the borrow first.
-                                    drop(handler_guard);
-                                    for _ in 0..len {
-                                        let keystroke = Keystroke {
-                                            key: if forward { "delete" } else { "backspace" }
-                                                .into(),
-                                            key_char: None,
-                                            modifiers: Modifiers::default(),
-                                        };
-                                        Self::dispatch_input_with_callbacks(
-                                            &callbacks,
-                                            PlatformInput::KeyDown(KeyDownEvent {
-                                                keystroke: keystroke.clone(),
-                                                is_held: false,
-                                                prefer_character_input: false,
-                                            }),
-                                        );
-                                        Self::dispatch_input_with_callbacks(
-                                            &callbacks,
-                                            PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }),
-                                        );
-                                    }
-                                    return;
-                                }
-
-                                if let Some(selection) = selection {
-                                    let range = if selection.range.start != selection.range.end {
-                                        selection.range
-                                    } else {
-                                        let caret = if selection.reversed {
-                                            selection.range.start
-                                        } else {
-                                            selection.range.end
-                                        };
-                                        // Read one extra UTF-16 unit so a one-unit
-                                        // deletion cannot split a surrogate pair.
-                                        let request = if forward {
-                                            caret..caret.saturating_add(len).saturating_add(1)
-                                        } else {
-                                            caret.saturating_sub(len.saturating_add(1))..caret
-                                        };
-                                        let mut adjusted = None;
-                                        let text = handler.text_for_range(request, &mut adjusted);
-                                        let mut units = 0;
-                                        if let Some(text) = text {
-                                            if forward {
-                                                for character in text.chars() {
-                                                    units += character.len_utf16();
-                                                    if units >= len {
-                                                        break;
-                                                    }
-                                                }
-                                            } else {
-                                                for character in text.chars().rev() {
-                                                    units += character.len_utf16();
-                                                    if units >= len {
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            units = len;
-                                        }
-                                        if forward {
-                                            caret..caret.saturating_add(units)
-                                        } else {
-                                            caret.saturating_sub(units)..caret
-                                        }
-                                    };
-                                    handler.replace_text_in_range(Some(range), "");
-                                } else {
-                                    handler.replace_text_in_range(None, "");
-                                }
-                            }
-                            ImeEvent::ImeStatusEvent(status) => {
-                                if matches!(status, openharmony_ability::ime::KeyboardStatus::Hide)
-                                {
-                                    handler.unmark_text();
-                                }
-                            }
-                        }
-                    })
-                    .detach();
+                // Ability already delivers IME callbacks on the UI thread. Deferring
+                // only IME edits lets synchronous space/key events overtake the text.
+                self.dispatch_ime_event(ime_event.clone());
                 self.schedule_ime_text_update();
             }
             InputEvent::XComponent(XComponentInputEvent::Mouse(mouse_event)) => {
-                if mouse_event.screen_x.is_finite() && mouse_event.screen_y.is_finite() {
+                if mouse_event.action == MouseAction::Press
+                    && mouse_event.screen_x.is_finite()
+                    && mouse_event.screen_y.is_finite()
+                {
                     let absolute = (
                         mouse_event.screen_x.round() as i64,
                         mouse_event.screen_y.round() as i64,
                     );
                     self.pointer_screen_position.set(Some(absolute));
-                    if mouse_event.action == MouseAction::Press {
-                        if let Some(mut session) = self.manipulation.get() {
-                            session.pointer = absolute;
-                            self.manipulation.set(Some(session));
-                        }
-                    } else if mouse_event.action != MouseAction::Cancel {
-                        self.update_manipulation(absolute);
+                    if let Some(mut session) = self.manipulation.get() {
+                        session.pointer = absolute;
+                        self.manipulation.set(Some(session));
                     }
                 }
                 let position = self.point_from_device_pixels(mouse_event.x, mouse_event.y);
@@ -2266,21 +2974,29 @@ impl OhosWindow {
                         });
                         drop(click);
                         self.pressed_mouse_button.set(Some(button));
-                        self.dispatch_input(PlatformInput::MouseDown(MouseDownEvent {
-                            button,
-                            position,
-                            modifiers: self.key_state.borrow().modifiers(),
-                            click_count,
-                            first_mouse: false,
-                        }));
-                        if button == MouseButton::Left
+                        let result =
+                            self.dispatch_input(PlatformInput::MouseDown(MouseDownEvent {
+                                button,
+                                position,
+                                modifiers: self.key_state.borrow().modifiers(),
+                                click_count,
+                                first_mouse: false,
+                            }));
+                        // Title-bar controls can consume presses inside the parent's drag area.
+                        // Starting a move anyway lets its queued position overwrite maximize.
+                        if result.propagate
+                            && !result.default_prevented
+                            && button == MouseButton::Left
                             && matches!(self.hit_window_control(), Some(WindowControlArea::Drag))
                         {
-                            self.begin_manipulation(None);
+                            self.start_window_move();
                         }
                     }
                     MouseAction::Release => {
                         self.manipulation.set(None);
+                        if let Some(subscription) = self.move_subscription.borrow().as_ref() {
+                            subscription.cancel();
+                        }
                         let button = event_button.or(self.pressed_mouse_button.get());
                         self.pressed_mouse_button.set(None);
                         let Some(button) = button else {
@@ -2321,9 +3037,7 @@ impl OhosWindow {
                         }));
                     }
                     MouseAction::Cancel => {
-                        self.manipulation.set(None);
-                        self.pressed_mouse_button.set(None);
-                        self.mouse_click.borrow_mut().take();
+                        self.cancel_mouse_input();
                     }
                     MouseAction::None => {}
                 }
@@ -2332,92 +3046,31 @@ impl OhosWindow {
                 self.set_hovered(*hovered);
             }
             InputEvent::ArkUi(ArkUiInputEvent::Pointer(pointer)) => {
+                if pointer.event_type == UIInputEvent::Touch
+                    && (pointer.source_type == UIInputSourceType::Mouse
+                        || pointer.tool_type == UIInputToolType::Mouse)
+                {
+                    return;
+                }
                 if let Some(id) = pointer.pointer_id {
                     self.native_pointer_id.set(Some(id));
                 }
-                if pointer.action == UIInputAction::Down {
-                    if pointer.display_x.is_finite() && pointer.display_y.is_finite() {
-                        let absolute = (
-                            pointer.display_x.round() as i64,
-                            pointer.display_y.round() as i64,
-                        );
-                        self.pointer_screen_position.set(Some(absolute));
-                        if let Some(mut session) = self.manipulation.get() {
-                            session.pointer = absolute;
-                            self.manipulation.set(Some(session));
+                if pointer.source_type == UIInputSourceType::Mouse
+                    && pointer.action == UIInputAction::Move
+                {
+                    // Releases and hover exits can both be absent outside a native
+                    // window. Reconcile buttons before using re-entry coordinates.
+                    if pointer.mouse_buttons_pressed == Some(false) {
+                        if self.pressed_mouse_button.get().is_some() {
+                            self.cancel_mouse_input();
                         }
+                    } else {
+                        self.record_screen_pointer(pointer.display_x, pointer.display_y);
                     }
-                } else if pointer.source_type != UIInputSourceType::Mouse
-                    && pointer.action != UIInputAction::Cancel
-                {
-                    self.record_screen_pointer(pointer.display_x, pointer.display_y);
-                }
-                if pointer.action == UIInputAction::Cancel
-                    || (pointer.source_type != UIInputSourceType::Mouse
-                        && pointer.action == UIInputAction::Up)
-                {
-                    self.manipulation.set(None);
                 }
             }
             InputEvent::ArkUi(ArkUiInputEvent::Drag(drag)) => {
-                use openharmony_ability::DragPhase;
-                let offset = self
-                    .app
-                    .borrow()
-                    .as_ref()
-                    .map(|app| app.content_rect_for(self.window_id))
-                    .unwrap_or_default();
-                let position = self.point_from_device_pixels(
-                    drag.window_x - offset.left as f32,
-                    drag.window_y - offset.top as f32,
-                );
-                let paths = drag
-                    .file_uris
-                    .iter()
-                    .filter_map(|uri| {
-                        ohos_fileuri_binding::get_path_from_uri(uri)
-                            .ok()
-                            .map(std::path::PathBuf::from)
-                    })
-                    .collect::<smallvec::SmallVec<[_; 2]>>();
-                if matches!(drag.phase, DragPhase::Enter | DragPhase::Drop) {
-                    info!(
-                        "OHOS native drag {:?} window={} uris={} paths={} at ({}, {})",
-                        drag.phase,
-                        self.window_id,
-                        drag.file_uris.len(),
-                        paths.len(),
-                        drag.window_x,
-                        drag.window_y
-                    );
-                }
-                if matches!(drag.phase, DragPhase::Enter | DragPhase::Drop) && !paths.is_empty() {
-                    self.incoming_drag.set(true);
-                    self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Entered {
-                        position,
-                        paths: crate::ExternalPaths(paths),
-                    }));
-                }
-                match drag.phase {
-                    DragPhase::Move if self.incoming_drag.get() => {
-                        self.dispatch_input(PlatformInput::FileDrop(
-                            crate::FileDropEvent::Pending { position },
-                        ));
-                    }
-                    DragPhase::Drop if self.incoming_drag.replace(false) => {
-                        let result = self.dispatch_input(PlatformInput::FileDrop(
-                            crate::FileDropEvent::Submit { position },
-                        ));
-                        if !result.propagate || result.default_prevented {
-                            drag.response.accept();
-                        }
-                        self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Exited));
-                    }
-                    DragPhase::Leave if self.incoming_drag.replace(false) => {
-                        self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Exited));
-                    }
-                    _ => {}
-                }
+                self.dispatch_file_drop(drag);
             }
             InputEvent::ArkUi(ArkUiInputEvent::Axis(axis_event)) => {
                 let position = self.pointer_position_from_arkui(axis_event.pointer);
@@ -2443,6 +3096,11 @@ impl OhosWindow {
             InputEvent::ArkUi(ArkUiInputEvent::Gesture(
                 openharmony_ability::GestureEvent::Pan(pan),
             )) => {
+                if pan.pointer.source_type == UIInputSourceType::Mouse
+                    || pan.pointer.tool_type == UIInputToolType::Mouse
+                {
+                    return;
+                }
                 let phase = match pan.phase {
                     openharmony_ability::GesturePhase::Start => TouchPhase::Started,
                     openharmony_ability::GesturePhase::Update => TouchPhase::Moved,
@@ -2484,17 +3142,14 @@ impl OhosWindow {
                 }
             }
             InputEvent::ArkUi(ArkUiInputEvent::Key(key_event)) => {
+                let response = key_event.response.clone();
                 let inputs = self.key_state.borrow_mut().handle_arkui(key_event);
+                let mut consumed = false;
                 for input in inputs {
-                    if self.dispatch_keyboard_input(input, true) {
-                        key_event.response.consume();
-                    }
+                    consumed |= self.dispatch_keyboard_input(input, true);
                 }
-            }
-            InputEvent::ArkUi(ArkUiInputEvent::KeyPreIme(key_event)) => {
-                let change = self.key_state.borrow_mut().handle_arkui_state(key_event);
-                if let Some(change) = change {
-                    self.dispatch_input(change);
+                if consumed {
+                    response.consume();
                 }
             }
         }
@@ -2503,6 +3158,280 @@ impl OhosWindow {
     fn invalidate_pending_edit(&self) {
         self.edit_generation
             .set(self.edit_generation.get().wrapping_add(1));
+    }
+
+    fn dispatch_ime_event(&self, ime_event: ImeEvent) {
+        let handler_ref = &self.input_handler;
+        let callbacks = &self.callbacks;
+        if let ImeEvent::MoveCursorEvent(direction) = ime_event {
+            let key = match direction {
+                ImeDirection::Up => "up",
+                ImeDirection::Down => "down",
+                ImeDirection::Left => "left",
+                ImeDirection::Right => "right",
+                ImeDirection::None => return,
+            };
+            Self::dispatch_input_with_callbacks(
+                callbacks,
+                PlatformInput::KeyDown(KeyDownEvent {
+                    keystroke: Keystroke {
+                        key: key.into(),
+                        key_char: None,
+                        modifiers: Modifiers::default(),
+                    },
+                    is_held: false,
+                    prefer_character_input: false,
+                }),
+            );
+            return;
+        }
+        if let ImeEvent::EnterEvent(action) = ime_event {
+            if let Some(handler) = handler_ref.borrow_mut().as_mut() {
+                handler.unmark_text();
+            }
+            // Confirm keys must reach application key bindings;
+            // Search/Send/Next must not silently insert a newline.
+            let result = Self::dispatch_input_with_callbacks(
+                callbacks,
+                PlatformInput::KeyDown(KeyDownEvent {
+                    keystroke: Keystroke {
+                        key: "enter".into(),
+                        key_char: None,
+                        modifiers: Modifiers::default(),
+                    },
+                    is_held: false,
+                    prefer_character_input: false,
+                }),
+            );
+            if result.propagate
+                && matches!(
+                    EnterKey::from(action as u32),
+                    EnterKey::Newline | EnterKey::Unspecified
+                )
+                && let Some(handler) = handler_ref.borrow_mut().as_mut()
+            {
+                handler.replace_text_in_range(None, "\n");
+            }
+            return;
+        }
+        let mut handler_guard = handler_ref.borrow_mut();
+        let Some(handler) = handler_guard.as_mut() else {
+            return;
+        };
+
+        match ime_event {
+            ImeEvent::TextInputEvent(data) => {
+                handler.replace_text_in_range(None, &data.text);
+                handler.unmark_text();
+            }
+            ImeEvent::PreviewTextEvent { text, start, end } => {
+                let range = (start >= 0 && end >= start).then_some(start as usize..end as usize);
+                handler.replace_and_mark_text_in_range(range, &text, None);
+            }
+            ImeEvent::FinishPreviewEvent => handler.unmark_text(),
+            ImeEvent::EnterEvent(_) => unreachable!("confirm key handled above"),
+            ImeEvent::MoveCursorEvent(_) => {
+                unreachable!("cursor key handled above")
+            }
+            ImeEvent::ExtendActionEvent(_) => {
+                unreachable!("edit command handled above")
+            }
+            ImeEvent::SelectionEvent { start, end } => {
+                if start >= 0 && end >= 0 {
+                    handler.unmark_text();
+                    handler
+                        .set_selected_text_range(start.min(end) as usize..start.max(end) as usize);
+                }
+            }
+            ImeEvent::BackspaceEvent(len) | ImeEvent::DeleteForwardEvent(len) => {
+                let forward = matches!(ime_event, ImeEvent::DeleteForwardEvent(_));
+                let len = (len).max(0) as usize;
+                if len == 0 {
+                    return;
+                }
+
+                let selection = handler.selected_text_range(true);
+                let has_editable_text = selection.as_ref().is_some_and(|selection| {
+                    handler
+                        .text_for_range(selection.range.clone(), &mut None)
+                        .is_some()
+                });
+                if !has_editable_text {
+                    // Terminals expose an IME cursor without editable backing text.
+                    // Let their key handlers encode deletion for the PTY.
+                    // Dispatch can re-enter input handling, so release the borrow first.
+                    drop(handler_guard);
+                    for _ in 0..len {
+                        let keystroke = Keystroke {
+                            key: if forward { "delete" } else { "backspace" }.into(),
+                            key_char: None,
+                            modifiers: Modifiers::default(),
+                        };
+                        Self::dispatch_input_with_callbacks(
+                            callbacks,
+                            PlatformInput::KeyDown(KeyDownEvent {
+                                keystroke: keystroke.clone(),
+                                is_held: false,
+                                prefer_character_input: false,
+                            }),
+                        );
+                        Self::dispatch_input_with_callbacks(
+                            callbacks,
+                            PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }),
+                        );
+                    }
+                    return;
+                }
+
+                if let Some(selection) = selection {
+                    let range = if selection.range.start != selection.range.end {
+                        selection.range
+                    } else {
+                        let caret = if selection.reversed {
+                            selection.range.start
+                        } else {
+                            selection.range.end
+                        };
+                        // Read one extra UTF-16 unit so a one-unit
+                        // deletion cannot split a surrogate pair.
+                        let request = if forward {
+                            caret..caret.saturating_add(len).saturating_add(1)
+                        } else {
+                            caret.saturating_sub(len.saturating_add(1))..caret
+                        };
+                        let mut adjusted = None;
+                        let text = handler.text_for_range(request, &mut adjusted);
+                        let mut units = 0;
+                        if let Some(text) = text {
+                            if forward {
+                                for character in text.chars() {
+                                    units += character.len_utf16();
+                                    if units >= len {
+                                        break;
+                                    }
+                                }
+                            } else {
+                                for character in text.chars().rev() {
+                                    units += character.len_utf16();
+                                    if units >= len {
+                                        break;
+                                    }
+                                }
+                            }
+                        } else {
+                            units = len;
+                        }
+                        if forward {
+                            caret..caret.saturating_add(units)
+                        } else {
+                            caret.saturating_sub(units)..caret
+                        }
+                    };
+                    handler.replace_text_in_range(Some(range), "");
+                } else {
+                    handler.replace_text_in_range(None, "");
+                }
+            }
+            ImeEvent::ImeStatusEvent(status) => {
+                if matches!(status, openharmony_ability::ime::KeyboardStatus::Hide) {
+                    handler.unmark_text();
+                }
+            }
+        }
+    }
+
+    fn dispatch_file_drop(&self, drag: &openharmony_ability::DragInputData) {
+        use openharmony_ability::DragPhase;
+        let offset = self
+            .app
+            .borrow()
+            .as_ref()
+            .map(|app| app.content_rect_for(self.window_id))
+            .unwrap_or_default();
+        let position = self.point_from_device_pixels(
+            drag.window_x - offset.left as f32,
+            drag.window_y - offset.top as f32,
+        );
+        if matches!(drag.phase, DragPhase::Enter | DragPhase::Drop) {
+            let paths = match super::platform::resolve_file_paths(&drag.file_uris) {
+                Ok(paths) => paths,
+                Err(error) => {
+                    warn!("Failed to resolve OHOS dropped files: {error:#}");
+                    if matches!(drag.phase, DragPhase::Drop)
+                        && let Some(app) = self.app.borrow().clone()
+                    {
+                        self.background_executor
+                            .spawn(super::platform::show_platform_error(
+                                app,
+                                self.window_id,
+                                "Unable to open dropped files",
+                                format!("{error:#}"),
+                            ))
+                            .detach();
+                    }
+                    Vec::new()
+                }
+            };
+            // The final drop can contain different data or lose access. Never
+            // submit paths retained from an earlier hover when it cannot be resolved.
+            if paths.is_empty() {
+                if self.incoming_drag.replace(false) {
+                    self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Exited));
+                }
+                return;
+            }
+            info!(
+                "OHOS native drag {:?} window={} uris={} paths={} at ({}, {})",
+                drag.phase,
+                self.window_id,
+                drag.file_uris.len(),
+                paths.len(),
+                drag.window_x,
+                drag.window_y
+            );
+            if self.incoming_drag.replace(true) {
+                // GPUI preserves an active drag on Entered. Clear the hover payload
+                // before installing the final paths delivered by the native drop.
+                self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Exited));
+            }
+            self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Entered {
+                position,
+                paths: crate::ExternalPaths(paths.into()),
+            }));
+        }
+        match drag.phase {
+            DragPhase::Move if self.incoming_drag.get() => {
+                self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Pending {
+                    position,
+                }));
+            }
+            DragPhase::Drop if self.incoming_drag.replace(false) => {
+                // OHOS may supply paths only on Drop. Zed's drop targets become
+                // visible after Entered, so paint their hitboxes before Submit.
+                // Request presentation to bypass inactive-window frame throttling.
+                self.presentation.request();
+                self.draw_requested_frame(Instant::now());
+                let result =
+                    self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Submit {
+                        position,
+                    }));
+                if !result.propagate || result.default_prevented {
+                    drag.response.accept();
+                    super::platform::retain_file_access(
+                        self.file_access.clone(),
+                        self.app.borrow().clone(),
+                        &self.background_executor,
+                        self.window_id,
+                        drag.file_uris.clone(),
+                    );
+                }
+                self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Exited));
+            }
+            DragPhase::Leave if self.incoming_drag.replace(false) => {
+                self.dispatch_input(PlatformInput::FileDrop(crate::FileDropEvent::Exited));
+            }
+            _ => {}
+        }
     }
 
     fn dispatch_keyboard_input(&self, input: PlatformInput, after_ime: bool) -> bool {
@@ -2580,7 +3509,6 @@ impl OhosWindow {
     }
 }
 
-/// Owned main-thread edit context, also retained by queued native IME commands.
 struct OhosTextEditing {
     app: Rc<RefCell<Option<OpenHarmonyApp>>>,
     callbacks: Rc<RefCell<WindowCallbacks>>,
@@ -2971,6 +3899,10 @@ impl PlatformWindow for OhosWindowHandle {
         self.with_window(|window| window.on_moved(callback))
     }
 
+    fn on_display_changed(&self, callback: Box<dyn FnMut()>) {
+        self.with_window(|window| window.on_display_changed(callback))
+    }
+
     fn on_should_close(&self, callback: Box<dyn FnMut() -> bool>) {
         self.with_window(|window| window.on_should_close(callback))
     }
@@ -3031,6 +3963,10 @@ impl PlatformWindow for OhosWindowHandle {
         self.with_window(|window| window.show_window_menu(position))
     }
 
+    fn show_app_menu(&self, position: Point<Pixels>, menu_name: Option<&str>) -> bool {
+        self.with_window(|window| window.show_app_menu(position, menu_name))
+    }
+
     fn start_window_move(&self) {
         self.with_window(|window| window.start_window_move())
     }
@@ -3077,7 +4013,28 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn window_bounds(&self) -> WindowBounds {
-        WindowBounds::Windowed(*self.bounds.borrow())
+        if !self.fullscreen.get() && !self.maximized.get() {
+            return WindowBounds::Windowed(*self.bounds.borrow());
+        }
+        let restore_bounds = self
+            .floating_state
+            .get()
+            .map(|state| {
+                let scale = self.scale_factor();
+                Bounds::new(
+                    point(px(state.left as f32 / scale), px(state.top as f32 / scale)),
+                    size(
+                        px(state.width as f32 / scale),
+                        px(state.height as f32 / scale),
+                    ),
+                )
+            })
+            .unwrap_or_else(|| *self.bounds.borrow());
+        if self.fullscreen.get() {
+            WindowBounds::Fullscreen(restore_bounds)
+        } else {
+            WindowBounds::Maximized(restore_bounds)
+        }
     }
 
     fn content_size(&self) -> Size<Pixels> {
@@ -3164,13 +4121,27 @@ impl PlatformWindow for OhosWindow {
                 .position(PromptButton::is_cancel)
                 .map(|index| index as u32),
             anchor: None,
+            appearance: None,
         };
         let (sender, receiver) = oneshot::channel();
+        let window = self
+            .window_index
+            .upgrade()
+            .and_then(|index| index.borrow().get(&self.window_id).cloned());
         self.foreground_executor
             .spawn(async move {
-                match client.show_prompt(request).await {
+                let result = client.show_prompt(request).await;
+                if let Some(window) = window.as_ref().and_then(Weak::upgrade) {
+                    let window = window.borrow();
+                    if !window.closed.get() && !window.released.get() {
+                        window.focus_native_surface();
+                    }
+                }
+                match result {
                     Ok(index) => {
-                        let _ = sender.send(index as usize);
+                        if sender.send(index as usize).is_err() {
+                            log::debug!("OHOS native prompt receiver was dropped");
+                        }
                     }
                     Err(error) => warn!("OHOS native prompt failed: {error}"),
                 }
@@ -3180,14 +4151,70 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn activate(&self) {
+        if self.closed.get() || self.released.get() {
+            return;
+        }
+        self.cancel_activation();
+        self.cancel_other_activations();
+        self.activation_pending.set(true);
+        self.visibility.set(WindowVisibility::Visible);
+        self.sync_frame_delivery();
+        // Focusing also launches a deferred native window. Waiting for its
+        // surface first would prevent that window from ever being created.
         let Some(client) = self.window_client() else {
+            self.activation_pending.set(false);
+            return;
+        };
+        let Some(window) = self
+            .window_index
+            .upgrade()
+            .and_then(|index| index.borrow().get(&self.window_id).cloned())
+        else {
+            self.activation_pending.set(false);
             return;
         };
         let window_id = self.window_id;
+        let generation = self.activation_generation.get();
         self.foreground_executor
             .spawn(async move {
-                if let Err(error) = client.focus_window(window_id).await {
-                    warn!("Failed to focus OHOS window: {error}");
+                // An independent OHOS child can report showWindow success before
+                // SceneBoard creates its container. Such an early focus request
+                // is lost, so wait for WINDOW_ACTIVE with bounded retries.
+                for delay in [0, 50, 100, 200, 400, 800, 1600, 3200, 5000, 5000] {
+                    if delay > 0 {
+                        smol::Timer::after(Duration::from_millis(delay)).await;
+                    }
+                    let should_request = window.upgrade().is_some_and(|window| {
+                        let window = window.borrow();
+                        if delay > 0
+                            && window.active.get()
+                            && window.activation_generation.get() == generation
+                        {
+                            window.cancel_activation();
+                        }
+                        window.activation_is_pending(generation)
+                    });
+                    if !should_request {
+                        return;
+                    }
+                    if let Err(error) = client.focus_window(window_id).await {
+                        warn!("Failed to focus OHOS window {window_id}: {error}");
+                        if let Some(window) = window.upgrade() {
+                            let window = window.borrow();
+                            if window.activation_generation.get() == generation {
+                                window.cancel_activation();
+                            }
+                        }
+                        return;
+                    }
+                }
+                smol::Timer::after(Duration::from_secs(5)).await;
+                if let Some(window) = window.upgrade() {
+                    let window = window.borrow();
+                    if window.activation_is_pending(generation) {
+                        window.cancel_activation();
+                        warn!("OHOS window {window_id} activation was not confirmed");
+                    }
                 }
             })
             .detach();
@@ -3275,8 +4302,10 @@ impl PlatformWindow for OhosWindow {
             return;
         };
         let window_id = self.window_id;
+        let mode_operations = self.mode_operations.clone();
         self.foreground_executor
             .spawn(async move {
+                let _operation = mode_operations.lock().await;
                 if let Err(error) = client.minimize_window(window_id).await {
                     warn!("Failed to minimize OHOS window: {error}");
                 }
@@ -3288,22 +4317,37 @@ impl PlatformWindow for OhosWindow {
         if !self.is_resizable {
             return;
         }
-        self.remember_floating_state();
         let Some(client) = self.window_client() else {
             return;
         };
         let window_id = self.window_id;
         let state = self.maximized.clone();
+        let window = self
+            .window_index
+            .upgrade()
+            .and_then(|index| index.borrow().get(&window_id).cloned());
+        let mode_operations = self.mode_operations.clone();
         self.foreground_executor
             .spawn(async move {
+                let _operation = mode_operations.lock().await;
+                let floating_state = window.as_ref().and_then(Weak::upgrade).and_then(|window| {
+                    let window = window.borrow();
+                    window.remember_floating_state();
+                    window.floating_state.get()
+                });
                 let next = !state.get();
                 let result = if next {
                     client.maximize_window(window_id).await
                 } else {
-                    client.recover_window(window_id).await
+                    Self::recover_floating_window(&client, window_id, floating_state).await
                 };
                 match result {
-                    Ok(()) => state.set(next),
+                    Ok(()) => {
+                        state.set(next);
+                        if let Some(window) = window.and_then(|window| window.upgrade()) {
+                            window.borrow().notify_window_mode_changed();
+                        }
+                    }
                     Err(error) => warn!("Failed to zoom OHOS window: {error}"),
                 }
             })
@@ -3311,17 +4355,30 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn toggle_fullscreen(&self) {
-        self.remember_floating_state();
         let Some(client) = self.window_client() else {
             return;
         };
         let window_id = self.window_id;
         let state = self.fullscreen.clone();
+        let window = self
+            .window_index
+            .upgrade()
+            .and_then(|index| index.borrow().get(&window_id).cloned());
+        let mode_operations = self.mode_operations.clone();
         self.foreground_executor
             .spawn(async move {
+                let _operation = mode_operations.lock().await;
+                if let Some(window) = window.as_ref().and_then(Weak::upgrade) {
+                    window.borrow().remember_floating_state();
+                }
                 let next = !state.get();
                 match client.set_fullscreen(window_id, next).await {
-                    Ok(()) => state.set(next),
+                    Ok(()) => {
+                        state.set(next);
+                        if let Some(window) = window.and_then(|window| window.upgrade()) {
+                            window.borrow().notify_window_mode_changed();
+                        }
+                    }
                     Err(error) => warn!("Failed to set OHOS fullscreen: {error}"),
                 }
             })
@@ -3401,12 +4458,17 @@ impl PlatformWindow for OhosWindow {
     fn text_input_state_changed(&self, change: TextInputStateChange) {
         match change {
             TextInputStateChange::FocusGained => {
+                self.set_native_text_input_active(true);
                 self.invalidate_pending_edit();
                 self.show_keyboard_if_needed();
             }
             TextInputStateChange::FocusLost => {
+                self.set_native_text_input_active(false);
                 self.invalidate_pending_edit();
                 self.hide_keyboard_if_needed();
+                // Hiding the keyboard keeps the native editor attached. Vim command
+                // mode needs hardware keys to reach GPUI instead of that IME session.
+                self.detach_ime();
             }
             TextInputStateChange::SelectionChanged | TextInputStateChange::ContentChanged => {
                 self.invalidate_pending_edit();
@@ -3422,6 +4484,10 @@ impl PlatformWindow for OhosWindow {
 
     fn on_moved(&self, callback: Box<dyn FnMut()>) {
         self.callbacks.borrow_mut().moved = Some(callback);
+    }
+
+    fn on_display_changed(&self, callback: Box<dyn FnMut()>) {
+        self.callbacks.borrow_mut().display_changed = Some(callback);
     }
 
     fn on_should_close(&self, callback: Box<dyn FnMut() -> bool>) {
@@ -3447,6 +4513,14 @@ impl PlatformWindow for OhosWindow {
         {
             return;
         }
+        if self.defer_presentation.get() {
+            // Refreshing the focused input handler needs GPUI's paint pass, but
+            // submitting each intermediate scene blocks the next IME edit. GPUI
+            // clears its presentation flag even here, so retain our own demand.
+            self.presentation.request();
+            self.frames.request();
+            return;
+        }
         // Initialize renderer lazily if not already initialized
         // This ensures native_window is available (after SurfaceCreate event)
         if self.renderer.borrow().is_none()
@@ -3460,6 +4534,16 @@ impl PlatformWindow for OhosWindow {
         // Use WGPU renderer to render the scene.
         if let Some(ref mut renderer) = *self.renderer.borrow_mut() {
             let presentation = renderer.draw(scene);
+            if self.file_access.on_presentation(presentation) {
+                let file_access = self.file_access.clone();
+                self.background_executor
+                    .spawn(async move {
+                        if let Err(error) = file_access.restore() {
+                            warn!("Failed to restore OHOS file access: {error:#}");
+                        }
+                    })
+                    .detach();
+            }
             if self.presentation.record(presentation) {
                 self.frames.request();
             }
@@ -3492,10 +4576,11 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn request_decorations(&self, decorations: WindowDecorations) {
-        if self.window_id == 0 {
-            return;
-        }
         self.requested_decorations.set(decorations);
+        info!(
+            "OHOS window {} requested decorations: {decorations:?}",
+            self.window_id
+        );
         // GPUI can request decorations before asynchronous OS window creation
         // finishes. SurfaceCreate reapplies the retained request once ready.
         if self
@@ -3511,133 +4596,134 @@ impl PlatformWindow for OhosWindow {
         };
         let window_id = self.window_id;
         let state = self.decorations.clone();
+        let window_index = self.window_index.clone();
         self.foreground_executor
             .spawn(async move {
                 match client
                     .set_window_decorations(window_id, decorations == WindowDecorations::Server)
                     .await
                 {
-                    Ok(()) => state.set(decorations),
+                    Ok(()) => {
+                        info!("OHOS window {window_id} applied decorations: {decorations:?}");
+                        if state.replace(decorations) != decorations {
+                            let window = window_index.upgrade().and_then(|index| {
+                                index.borrow().get(&window_id).and_then(Weak::upgrade)
+                            });
+                            if let Some(window) = window {
+                                let window = window.borrow();
+                                if Rc::ptr_eq(&window.decorations, &state)
+                                    && !window.released.get()
+                                    && !window.closed.get()
+                                {
+                                    window.force_render.set(true);
+                                    window.schedule_frame();
+                                }
+                            }
+                        }
+                    }
                     Err(error) => warn!("Failed to set OHOS window decorations: {error}"),
                 }
             })
             .detach();
     }
 
+    fn show_app_menu(&self, position: Point<Pixels>, menu_name: Option<&str>) -> bool {
+        if !self.native_menus {
+            return false;
+        }
+        let Some(app) = self.app.borrow().clone() else {
+            return false;
+        };
+        let request = MenuPopupMenubarRequest {
+            window_id: if self.window_id == 0 {
+                "main".into()
+            } else {
+                self.window_id.to_string()
+            },
+            menu_name: menu_name.map(str::to_owned),
+            x: f32::from(position.x) as f64,
+            y: f32::from(position.y) as f64,
+            restore_focus_id: self.native_menu_focus_id(),
+        };
+        self.foreground_executor
+            .spawn(async move {
+                let result = async { MenuClient::new(&app)?.popup_menubar(request).await }.await;
+                if let Err(error) = result {
+                    warn!("Failed to open OHOS application menu: {error}");
+                }
+            })
+            .detach();
+        true
+    }
+
     fn show_window_menu(&self, position: Point<Pixels>) {
         if !self.window_controls().window_menu {
             return;
         }
-        let Some(client) = self.window_client() else {
+        let Some(app) = self.app.borrow().clone() else {
             return;
         };
-        let mut commands = Vec::new();
-        let mut labels = Vec::new();
+        let mut items = Vec::new();
+        let mut add_command = |command: &str, text: &str| {
+            items.push(MenuCommandItem {
+                id: format!("window-{}:gpui-window-{command}", self.window_id),
+                text: text.into(),
+                enabled: true,
+            });
+        };
         if self.is_minimizable {
-            commands.push(0);
-            labels.push("Minimize".into());
+            add_command("minimize", "Minimize");
         }
         if self.is_resizable {
-            commands.push(1);
-            labels.push(
+            add_command(
+                "zoom",
                 if self.maximized.get() {
                     "Restore"
                 } else {
                     "Maximize"
-                }
-                .into(),
+                },
             );
         }
-        commands.push(2);
-        labels.push(
+        add_command(
+            "fullscreen",
             if self.fullscreen.get() {
                 "Exit fullscreen"
             } else {
                 "Fullscreen"
-            }
-            .into(),
+            },
         );
-        commands.push(3);
-        labels.push("Close".into());
-        let cancel = labels.len() as u32;
-        labels.push("Cancel".into());
-        let request = openharmony_ability_plugin_window::WindowPromptRequest {
-            window_id: self.window_id,
-            message: "Window".into(),
-            detail: None,
-            level: 0,
-            buttons: labels,
-            cancel_index: Some(cancel),
-            anchor: Some(openharmony_ability_plugin_window::WindowPromptAnchor {
-                x: f64::from(position.x.as_f32().max(0.0)),
-                y: f64::from(position.y.as_f32().max(0.0)),
-            }),
+        add_command("close", "Close");
+        let request = MenuPopupCommandsRequest {
+            window_id: if self.window_id == 0 {
+                "main".into()
+            } else {
+                self.window_id.to_string()
+            },
+            items,
+            x: f64::from(position.x.as_f32().max(0.0)),
+            y: f64::from(position.y.as_f32().max(0.0)),
+            restore_focus_id: self.native_menu_focus_id(),
         };
-        let window_id = self.window_id;
-        let maximized = self.maximized.clone();
-        let fullscreen = self.fullscreen.clone();
-        let callbacks = self.callbacks.clone();
-        let quit = self.quit.clone();
-        self.remember_floating_state();
         self.foreground_executor
             .spawn(async move {
-                let index = match client.show_prompt(request).await {
-                    Ok(index) => index as usize,
-                    Err(error) => {
-                        warn!("OHOS window menu closed: {error}");
-                        return;
-                    }
-                };
-                let Some(command) = commands.get(index) else {
-                    return;
-                };
-                let result = match command {
-                    0 => client.minimize_window(window_id).await,
-                    1 => {
-                        let next = !maximized.get();
-                        let result = if next {
-                            client.maximize_window(window_id).await
-                        } else {
-                            client.recover_window(window_id).await
-                        };
-                        if result.is_ok() {
-                            maximized.set(next);
-                        }
-                        result
-                    }
-                    2 => {
-                        let next = !fullscreen.get();
-                        let result = client.set_fullscreen(window_id, next).await;
-                        if result.is_ok() {
-                            fullscreen.set(next);
-                        }
-                        result
-                    }
-                    3 => {
-                        let mut should_close = callbacks.borrow_mut().should_close.take();
-                        let allowed = should_close.as_mut().is_none_or(|callback| callback());
-                        callbacks.borrow_mut().should_close = should_close;
-                        if !allowed {
-                            return;
-                        }
-                        if window_id == 0 {
-                            quit();
-                            Ok(())
-                        } else {
-                            client.destroy_window(window_id).await
-                        }
-                    }
-                    _ => return,
-                };
+                let result = async { MenuClient::new(&app)?.popup_commands(request).await }.await;
                 if let Err(error) = result {
-                    warn!("OHOS window menu command failed: {error}");
+                    warn!("Failed to open OHOS window menu: {error}");
                 }
             })
             .detach();
     }
 
     fn start_window_move(&self) {
+        if self.manipulation.get().is_some() {
+            return;
+        }
         self.begin_manipulation(None);
+        if self.manipulation.get().is_some()
+            && let Some(subscription) = self.move_subscription.borrow().as_ref()
+        {
+            subscription.request();
+        }
     }
 
     fn can_start_external_drag(&self) -> bool {
@@ -3758,7 +4844,7 @@ impl PlatformWindow for OhosWindow {
             fullscreen: available,
             maximize: available && self.is_resizable,
             minimize: available && self.is_minimizable,
-            window_menu: available,
+            window_menu: available && self.native_menus,
         }
     }
 
@@ -3796,11 +4882,6 @@ impl PlatformWindow for OhosWindow {
             width: (bounds.size.width.as_f32() as f64 * scale).max(1.0),
             height: (bounds.size.height.as_f32() as f64 * scale).max(1.0),
         };
-        if let Err(error) = app.update_ime_cursor_for(self.window_id, rect) {
-            warn!(
-                "Failed to update OHOS IME cursor for window {}: {error}",
-                self.window_id
-            );
-        }
+        self.update_ime(true, |ime| ime.try_update_cursor(rect));
     }
 }

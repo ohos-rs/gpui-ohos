@@ -7,4 +7,4 @@
 mod ohos;
 
 pub use gpui::*;
-pub use ohos::current_platform;
+pub use ohos::{PlatformOptions, current_platform, try_current_platform};

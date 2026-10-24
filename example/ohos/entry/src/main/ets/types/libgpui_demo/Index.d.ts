@@ -42,16 +42,13 @@ export interface UrlSchemeResponse {
   declared: boolean
 }
 
-export interface ClipboardChangedEvent {
-
-}
-
-export interface ClipboardClearRequest {
-
-}
-
-export interface ClipboardClearResponse {
-  accepted: boolean
+/**
+  * One exact representation. Text/HTML must be UTF-8 without embedded NUL;
+  * other formats are opaque bytes and cannot be empty on the native API.
+  */
+export interface ClipboardMimeContent {
+  mime: string
+  data: Array<number>
 }
 
 export interface ClipboardReadContentResponse {
@@ -60,62 +57,17 @@ export interface ClipboardReadContentResponse {
   uris: Array<string>
 }
 
-export interface ClipboardReadRecordsResponse {
-  records: Array<ClipboardRecord>
+export interface ClipboardReadMimeResponse {
+  contents: Array<ClipboardMimeContent>
+  available: Array<string>
 }
 
-export interface ClipboardReadTextRequest {
-
-}
-
-export interface ClipboardReadTextResponse {
-  text?: string
-}
-
-/** One native pasteboard record. Exactly one of text, encoded_image, or uri is set. */
+/** A convenience projection of one record. Use `read_mime` for all representations. */
 export interface ClipboardRecord {
   text?: string
   metadata?: string
   encodedImage?: Array<number>
   uri?: string
-}
-
-export interface ClipboardWriteEncodedImageRequest {
-  bytes: Array<number>
-}
-
-export interface ClipboardWriteHtmlRequest {
-  html: string
-}
-
-export interface ClipboardWriteHtmlResponse {
-  accepted: boolean
-}
-
-export interface ClipboardWriteImageRequest {
-  rgba: Array<number>
-  width: number
-  height: number
-}
-
-export interface ClipboardWriteImageResponse {
-  accepted: boolean
-}
-
-export interface ClipboardWriteRecordsRequest {
-  records: Array<ClipboardRecord>
-}
-
-export interface ClipboardWriteTextRequest {
-  text: string
-}
-
-export interface ClipboardWriteTextResponse {
-  accepted: boolean
-}
-
-export interface ClipboardWriteUrisRequest {
-  uris: Array<string>
 }
 
 /**
@@ -135,6 +87,8 @@ export interface FileDialogOptions {
   /** Suggested file name for the save dialog. */
   suggestedName?: string
   filters: Array<FileDialogFilter>
+  /** Ability window ID that owns the dialog. Omit for the default Ability picker. */
+  parentWindowId?: number
 }
 
 export interface FileDialogResponse {
@@ -209,17 +163,6 @@ export interface NodeHandleResponse {
 /** Appends a handle-owned node to this module's component root. */
 export interface NodeMountIntoRootRequest {
   handle: number
-}
-
-export interface PreviewTextEventData {
-  text: string
-  start: number
-  end: number
-}
-
-export interface SelectionEventData {
-  start: number
-  end: number
 }
 
 export interface WindowStageEventCallback {
@@ -317,6 +260,7 @@ export interface DisplaySnapshot {
   width: number
   height: number
   densityPixels: number
+  refreshRate?: number
   availableArea?: AvailableArea
   isDefault: boolean
 }
@@ -384,17 +328,6 @@ export interface ShowNotificationRequest {
   actions: Array<NotificationAction>
 }
 
-/** Empty request marker for the `restart` action. */
-export interface RestartRequest {
-
-}
-
-/** Result of dispatching `appRecovery.restartApp()`. */
-export interface RestartResponse {
-  /** 0 on success, negative on failure (mirrors the former TSFN contract). */
-  code: number
-}
-
 export interface AboutMetadataData {
   name?: string
   version?: string
@@ -415,12 +348,23 @@ export interface MenuClickEvent {
   windowId?: string
 }
 
+export interface MenuCommandItem {
+  id: string
+  text: string
+  enabled: boolean
+}
+
 export interface MenuItemData {
   id: string
   type: string
   text?: string
   enabled?: boolean
   accelerator?: string
+  /**
+    * Show the chord while the native renderer owns key dispatch and context.
+    * Missing/false retains ordinary native menu accelerator handling.
+    */
+  acceleratorDisplayOnly?: boolean
   predefinedType?: string
   checked?: boolean
   icon?: string
@@ -431,6 +375,25 @@ export interface MenuItemData {
 
 export interface MenuOpenEvent {
   windowId: string
+}
+
+export interface MenuPopupCommandsRequest {
+  windowId: string
+  items: Array<MenuCommandItem>
+  /** Content-local logical coordinates in vp. */
+  x: number
+  y: number
+  /** Inspector ID to restore synchronously when the native popup closes. */
+  restoreFocusId?: string
+}
+
+export interface MenuPopupMenubarRequest {
+  windowId: string
+  menuName?: string
+  x: number
+  y: number
+  /** Inspector ID to restore synchronously when the native popup closes. */
+  restoreFocusId?: string
 }
 
 export interface MenuPopupRequest {
@@ -534,6 +497,14 @@ export interface WindowBlurRequest {
   radius: number
 }
 
+export interface WindowCloseRequested {
+  windowId: number
+}
+
+export interface WindowCloseResponse {
+  preventClose: boolean
+}
+
 export interface WindowColorRequest {
   windowId: number
   color: number
@@ -607,11 +578,30 @@ export interface WindowMoveRequest {
   y: number
 }
 
+export interface WindowMoveRequested {
+  windowId: number
+}
+
+export interface WindowMoveResponse {
+  startMoving: boolean
+}
+
 export interface WindowPromptAnchor {
   /** Horizontal position in the target window's content, in logical vp units. */
   x: number
   /** Vertical position in the target window's content, in logical vp units. */
   y: number
+}
+
+/** Application-owned semantic colors in ARGB order, including alpha. */
+export interface WindowPromptAppearance {
+  background: number
+  foreground: number
+  mutedForeground: number
+  primary: number
+  primaryForeground: number
+  border: number
+  focus: number
 }
 
 export interface WindowPromptRequest {
@@ -624,6 +614,8 @@ export interface WindowPromptRequest {
   cancelIndex?: number
   /** Optional content-local position in logical vp units, not physical px or screen coordinates. */
   anchor?: WindowPromptAnchor
+  /** Omit to follow the target window's system colors. */
+  appearance?: WindowPromptAppearance
 }
 
 export interface WindowPromptResponse {
@@ -670,6 +662,15 @@ export interface HideAbilityRequest {
 }
 
 export interface HideAbilityResponse {
+  accepted: boolean
+}
+
+/** Restart the application into the calling Ability after application cleanup. */
+export interface RestartRequest {
+
+}
+
+export interface RestartResponse {
   accepted: boolean
 }
 
@@ -727,6 +728,6 @@ export declare function onBridgeLifecycle(kind: string): void
   */
 export declare function onBridgeSyncEvent(pluginId: string, event: string, requestTypeName: string, responseTypeName: string, value: unknown): unknown
 
-export declare function render(slot: NodeContent, renderOwner: string): void
+export declare function render(slot: NodeContent, renderOwner: string, nativeWindowId: number): void
 
-export declare function renderWindow(slot: NodeContent, renderOwner: string, windowId: number): void
+export declare function renderWindow(slot: NodeContent, renderOwner: string, windowId: number, nativeWindowId: number): void

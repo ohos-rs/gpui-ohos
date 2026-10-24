@@ -22,6 +22,8 @@ pub enum FrameInputDelivery {
 
 #[derive(Default)]
 pub(crate) struct FrameState {
+    pub(crate) clipboard: std::sync::Arc<crate::clipboard_support::NativeClipboard>,
+    pub(crate) delivery_window: Cell<i64>,
     pub(crate) xcomponent: Cell<bool>,
     pub(crate) callback_active: Rc<Cell<bool>>,
     pub(crate) fail_delivery: Cell<bool>,
@@ -43,9 +45,17 @@ pub(crate) struct FrameState {
 pub struct OpenHarmonyApp(pub(crate) Rc<FrameState>);
 
 impl OpenHarmonyApp {
+    pub fn registered_plugin<P: std::any::Any + Send + Sync>(
+        &self,
+    ) -> crate::Result<Option<std::sync::Arc<P>>> {
+        let plugin: std::sync::Arc<dyn std::any::Any + Send + Sync> =
+            std::sync::Arc::new(crate::ClipboardBridgePlugin(self.0.clipboard.clone()));
+        Ok(plugin.downcast::<P>().ok())
+    }
+
     pub fn set_frame_input_delivery_for(
         &self,
-        _window_id: i64,
+        window_id: i64,
         delivery: FrameInputDelivery,
     ) -> crate::Result<()> {
         assert!(
@@ -55,6 +65,7 @@ impl OpenHarmonyApp {
         if self.0.fail_delivery.replace(false) {
             return Err(Error);
         }
+        self.0.delivery_window.set(window_id);
         #[cfg(feature = "native-vsync")]
         assert_eq!(
             delivery,
@@ -89,6 +100,11 @@ pub(crate) mod window {
     }
 
     impl OhosWindow {
+        #[cfg(feature = "native-vsync")]
+        pub(crate) fn draw_native_frame(&self, time: Instant) {
+            self.draw_requested_frame(time);
+        }
+
         pub(crate) fn draw_requested_frame(&self, _time: Instant) {
             self.draws.set(self.draws.get() + 1);
             if let Some(callback) = self.on_draw.borrow_mut().as_mut() {
@@ -275,6 +291,32 @@ mod tests {
         assert!(!driver.app.0.xcomponent.get());
         #[cfg(feature = "native-vsync")]
         assert_eq!(driver.app.0.native_count.get(), 0);
+    }
+
+    #[test]
+    fn retained_frame_waker_follows_rebound_surface() {
+        let driver = Driver::new();
+        let retained = driver.frames.clone();
+        #[cfg(feature = "native-vsync")]
+        let old_token = driver.app.0.token.get();
+        {
+            let _scope = FrameCallbackScope::enter(driver.app.0.callback_active.clone());
+            driver.frames.rebind_window(42);
+            driver.frames.set_active(true, true);
+            assert_eq!(driver.app.0.delivery_window.get(), 0);
+        }
+        driver.flush();
+        assert_eq!(driver.app.0.delivery_window.get(), 42);
+        #[cfg(feature = "native-vsync")]
+        {
+            assert_eq!(driver.app.0.native_count.get(), 1);
+            assert_ne!(driver.app.0.token.get(), old_token);
+            driver.frames.on_native_callback(old_token);
+            assert_eq!(driver.window.borrow().draws.get(), 0);
+        }
+        retained.request();
+        driver.tick();
+        assert_eq!(driver.window.borrow().draws.get(), 1);
     }
 
     #[cfg(feature = "native-vsync")]

@@ -13,24 +13,28 @@ test = false
 
 [dependencies]
 anyhow = "1"
-gpui = { git = "https://github.com/ohos-rs/zed", rev = "f45c7c22d0", default-features = false }
+gpui = { git = "https://github.com/ohos-rs/zed", rev = "00542402c992e7a041f110c7d2386c60a40b7038", default-features = false }
 gpui-ohos = { path = "..", default-features = false }
 log = "0.4"
 ohos-hilog-binding = { version = "*", features = ["log"] }
 napi-derive-ohos = "=1.2.0"
 napi-ohos = "=1.2.0"
-openharmony-ability = "=1.0.0-beta.3"
-openharmony-ability-derive = "=1.0.0-beta.3"
-openharmony-ability-plugin-permission = "=1.0.0-beta.3"
+openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "b22ac744017d86cb6e7acddfc0f230126c536bff", version = "=1.0.0-beta.3" }
+openharmony-ability-derive = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "b22ac744017d86cb6e7acddfc0f230126c536bff", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-permission = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "b22ac744017d86cb6e7acddfc0f230126c536bff", version = "=1.0.0-beta.3" }
 
 [features]
-default = ["gles"]
+default = ["gles", "api-26"]
 gles = ["gpui-ohos/gles"]
 vulkan = ["gpui-ohos/vulkan"]
 native-vsync = ["gpui-ohos/native-vsync"]
+api-19 = ["gpui-ohos/api-19"]
+api-26 = ["gpui-ohos/api-26"]
 
 [build-dependencies]
 napi-build-ohos = "=1.2.0"
 
 [workspace]
 resolver = "2"
+
+exclude = ["ohos/vendor/openharmony-ability", "ohos/vendor/openharmony-ability/crates/*"]
