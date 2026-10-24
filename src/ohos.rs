@@ -7,6 +7,7 @@ mod display;
 mod file_access;
 mod frame_delivery;
 mod frame_demand;
+mod image_alpha;
 mod keyboard;
 mod launch;
 #[cfg(feature = "native-vsync")]
@@ -73,3 +74,5 @@ impl PlatformServices {
         })
     }
 }
+
+pub use image_alpha::{ImagePolicy, ImageRegistrationError, PremultipliedImage, RasterImage};

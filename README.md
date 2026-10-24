@@ -248,3 +248,28 @@ cargo test -p ohos-text-tests --locked --features grid
 The host harness generates its original font fixtures in Cargo's build output;
 no binary fonts or separate text-test lockfile are committed. See
 [the test harness](./tests/text/README.md) for coverage and Python selection.
+
+## Explicit image alpha and sampling
+
+Ordinary GPUI images keep straight alpha and linear filtering. Register externally
+rasterized images before their first atlas upload:
+
+```rust
+let ui_image = gpui_ohos::PremultipliedImage::new(premultiplied_pixels)?;
+let glyph_image = gpui_ohos::RasterImage::straight(straight_pixels)?;
+let color_glyph = gpui_ohos::RasterImage::premultiplied(color_pixels)?;
+```
+
+Each constructor returns `Result<_, ImageRegistrationError>`. A conflicting live
+registration returns the image ID and existing/requested `ImagePolicy` without
+panicking or changing the existing owner. Matching registrations share ownership;
+keep an owner alive while caching or painting its image. The last owner removes
+the live registration, but uploaded tiles retain their original policy until
+evicted. To change a policy, release every owner and evict the old atlas tiles
+before registering and uploading the image again.
+
+Empty atlas metadata borrows scene sprites directly, without copying them or
+performing per-sprite hash lookups. The backend still temporarily carries nondefault
+flags in GPU copies of `PolychromeSprite.pad`; this bounded workaround needs an
+upstream `RenderImage` alpha/sampling API before it can be removed. It does not
+change GPUI's scene ABI or the ordinary linear UI sampling path.

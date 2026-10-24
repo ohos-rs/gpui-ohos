@@ -28,6 +28,16 @@ generated binary fixtures are checked in. Set `PYTHON` to a Python 3 interpreter
 with the pinned requirement installed, for example one from a virtual environment.
 Generation failures stop the build and include the dependency installation hint.
 
+The harness also checks typed image-policy conflicts, duplicate and cloned owner
+lifetimes, concurrent lookup/cleanup, and tile policy retention. It executes the
+production sprite encoder with a truly empty metadata map and verifies that it
+returns the original slice without allocating or touching scratch storage.
+Run only these regressions with:
+
+```sh
+cargo test -p ohos-text-tests --release --locked image_alpha
+```
+
 These are host shaping and raster regressions, not OHOS device acceptance. Native
 font inventory, device locale changes, CJK/emoji fallback, document RTL text, and
 terminal fixed-cell rendering still need coordinated device verification.

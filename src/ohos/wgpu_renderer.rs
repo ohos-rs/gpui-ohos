@@ -131,6 +131,7 @@ pub struct WgpuRenderer {
     adapter_info: wgpu::AdapterInfo,
     path_vertices: RefCell<Vec<PathRasterizationVertex>>,
     path_sprites: RefCell<Vec<PathSprite>>,
+    polychrome_sprites: RefCell<Vec<PolychromeSprite>>,
 }
 
 impl WgpuRenderer {
@@ -380,6 +381,7 @@ impl WgpuRenderer {
             adapter_info,
             path_vertices: RefCell::new(Vec::new()),
             path_sprites: RefCell::new(Vec::new()),
+            polychrome_sprites: RefCell::new(Vec::new()),
         };
         renderer.write_global_params(true);
         Ok(renderer)
@@ -1515,6 +1517,10 @@ impl WgpuRenderer {
         scene: &Scene,
         instance_offset: &mut u64,
     ) -> Option<SceneInstanceBindings> {
+        let mut polychrome = self.polychrome_sprites.borrow_mut();
+        let polychrome = self
+            .atlas
+            .encode_image_alpha(&scene.polychrome_sprites, &mut polychrome);
         // One staging allocation and one queued copy for all instance kinds.
         let data = unsafe {
             [
@@ -1523,7 +1529,7 @@ impl WgpuRenderer {
                 Self::instance_bytes(&scene.underlines),
                 Self::instance_bytes(&scene.monochrome_sprites),
                 Self::instance_bytes(&scene.subpixel_sprites),
-                Self::instance_bytes(&scene.polychrome_sprites),
+                Self::instance_bytes(polychrome),
             ]
         };
         let start = (*instance_offset).next_multiple_of(self.instance_buffer_alignment);
