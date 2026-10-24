@@ -180,8 +180,8 @@ git submodule update --init --recursive
 ```
 
 Rust dependencies use the authorized coherent Ability integration revision
-`0e41a3141d1053e9a5172738538d725b050e2d36` from existing
-[Ability #98](https://github.com/harmony-contrib/openharmony-ability/pull/98);
+`b22ac744017d86cb6e7acddfc0f230126c536bff` from existing
+[Ability #109](https://github.com/harmony-contrib/openharmony-ability/pull/109);
 the example's ArkTS submodule uses that same commit. The library no longer reads
 Rust sources from `example/`.
 It includes unpublished runtime interfaces; using registry beta.3 for only one
@@ -189,16 +189,14 @@ side of that interface is unsupported. The combined source contains the D3
 single-delivery input contract and D4 native-only clipboard contract, with
 `ohos-native-bindings` unified on `43aec6c125503a47f7e875c793aaf2462e91ad19`.
 These are reproducible source dependencies, **not merge-ready release pins**:
-[Ability #93-#98](https://github.com/harmony-contrib/openharmony-ability/pull/98)
+[Ability #109](https://github.com/harmony-contrib/openharmony-ability/pull/109)
 and [GPUI core #3](https://github.com/ohos-rs/zed/pull/3) remain merge blockers.
 Replace these temporary, explicitly authorized integration pins with compatible
 published releases after the upstream interfaces land.
 
-Applications can set `App::set_native_prompt_style` to provide semantic dialog
-colors from their current theme. Native prompts convert GPUI RGBA colors to the
-Ability's ARGB contract. Omitting the style uses system colors; Ability handles
-alpha compositing and readable text/focus contrast without application-specific
-theme knowledge.
+Native prompts implement the existing `PlatformWindow::prompt` interface.
+Ability resolves their palette from the target window's system theme; no
+application color protocol or additional GPUI prompt interface is required.
 
 Ability owns UI-thread IME attachment transfer. Focus/readiness generations
 cancel stale retries; no consumer-owned background attachment worker remains.
