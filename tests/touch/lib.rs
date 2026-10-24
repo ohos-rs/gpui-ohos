@@ -565,3 +565,17 @@ mod tests {
         drop(task);
     }
 }
+#[allow(dead_code)]
+#[path = "../../src/ohos/mouse_buttons.rs"]
+mod mouse_buttons;
+#[allow(dead_code)]
+#[path = "../../src/ohos/pointer_position.rs"]
+#[cfg(feature = "native-input")]
+mod pointer_position;
+#[allow(dead_code)]
+#[path = "../../src/ohos/scroll_input.rs"]
+#[cfg(feature = "native-input")]
+mod scroll_input;
+#[allow(dead_code)]
+#[path = "../../src/ohos/scroll_packet.rs"]
+mod scroll_packet;

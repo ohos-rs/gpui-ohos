@@ -8,6 +8,7 @@ publish = false
 
 [features]
 native-vsync = []
+native-input = []
 
 [dependencies]
 gpui = { git = "https://github.com/ohos-rs/zed", rev = "00542402c992e7a041f110c7d2386c60a40b7038", default-features = false }

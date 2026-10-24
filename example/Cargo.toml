@@ -28,6 +28,7 @@ default = ["gles", "api-26"]
 gles = ["gpui-ohos/gles"]
 vulkan = ["gpui-ohos/vulkan"]
 native-vsync = ["gpui-ohos/native-vsync"]
+native-input = ["gpui-ohos/native-input"]
 api-19 = ["gpui-ohos/api-19"]
 api-26 = ["gpui-ohos/api-26"]
 
