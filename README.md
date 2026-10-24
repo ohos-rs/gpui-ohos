@@ -91,6 +91,7 @@ persistence does not revoke grants already stored by the OS or delete history.
 | `gles` | OpenGL ES rendering, enabled by default. |
 | `vulkan` | Vulkan rendering. |
 | `native-vsync` | Use NativeVSync frame callbacks instead of XComponent callbacks. |
+| `grid` | Experimental fixed-cell terminal shaping; disabled by default. |
 | `api-19` | Enable API-19 CapsLock / NumLock / ScrollLock state snapshots on keyboard events. |
 | `api-26` | Enable `api-19` and configure native hardware-key consumption before IME attachment (API 26+). |
 
@@ -217,3 +218,33 @@ cargo check --target aarch64-unknown-linux-ohos
 Host checks substitute native window/frame APIs. Native creation-time input
 routing, task-center close confirmation and enforced provider permission behavior
 still need further work; this does not establish complete desktop parity.
+
+
+## Shared font services
+
+Embedders that need exact face bytes or synthetic styles can use
+`PlatformServices::try_new(app, PlatformOptions::default())`. Its `fonts` catalog
+shares immutable font IDs and face data with the returned GPUI platform. Ordinary
+UI text retains the platform's locale-aware fallback and bidirectional shaping.
+The catalog, `PlatformServices`, face data, design coordinates and synthetic-style
+APIs are **experimental** and may change between releases. Runtime face identities
+and the exact registered bytes remain immutable.
+
+Terminal consumers must explicitly enable the nondefault `grid` Cargo feature to
+use `GridLayoutRequest`, `GridTextCell`, `GridLayoutError` and
+`FontCatalog::layout_grid`. The grid module and its shaper state are absent without
+that feature; ordinary document layout does not use it.
+Named instances preserve every original 16.16 axis coordinate, including width-only
+fonts. Explicit variation overrides retain the instance's other axes.
+
+Host font regressions use the root workspace and lockfile:
+
+```sh
+python3 -m pip install -r tests/text/requirements.txt
+cargo test -p ohos-text-tests --locked
+cargo test -p ohos-text-tests --locked --features grid
+```
+
+The host harness generates its original font fixtures in Cargo's build output;
+no binary fonts or separate text-test lockfile are committed. See
+[the test harness](./tests/text/README.md) for coverage and Python selection.

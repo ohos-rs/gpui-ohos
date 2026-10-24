@@ -1,5 +1,6 @@
 [workspace]
-members = []
+members = ["tests/text"]
+default-members = ["."]
 exclude = ["example", "tests/touch", "example/ohos/vendor/openharmony-ability", "example/ohos/vendor/openharmony-ability/crates/*"]
 resolver = "2"
 
@@ -14,6 +15,9 @@ anyhow = "1"
 bytemuck = "1"
 crossbeam-channel = "0.5"
 cosmic-text = "0.17.0"
+harfrust = "0.5.2"
+swash = "0.2.10"
+unicode-segmentation = "1.12"
 etagere = "0.2"
 font-kit = { package = "zed-font-kit", version = "0.14.1-zed", git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", features = ["source-fontconfig-dlopen"] }
 futures = "0.3.34"
@@ -67,6 +71,7 @@ default = ["gles"]
 gles = ["wgpu/gles"]
 vulkan = ["wgpu/vulkan"]
 native-vsync = ["dep:ohos-vsync-binding"]
+grid = ["dep:harfrust"]
 api-19 = ["openharmony-ability/api-19"]
 api-26 = ["api-19", "openharmony-ability/api-26"]
 
@@ -80,6 +85,9 @@ gpui.workspace = true
 anyhow.workspace = true
 bytemuck.workspace = true
 cosmic-text.workspace = true
+harfrust = { workspace = true, optional = true }
+swash.workspace = true
+unicode-segmentation.workspace = true
 etagere.workspace = true
 font-kit.workspace = true
 futures.workspace = true

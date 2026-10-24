@@ -81,7 +81,7 @@ pub(crate) struct OhosPlatform {
     dispatcher: Arc<OhosDispatcher>,
     background_executor: BackgroundExecutor,
     foreground_executor: ForegroundExecutor,
-    text_system: Arc<dyn PlatformTextSystem>,
+    text_system: Arc<OhosTextSystem>,
     primary_display: Rc<RefCell<Option<OhosDisplay>>>,
     other_displays: Rc<RefCell<Vec<OhosDisplay>>>,
     displays_changed: PlatformEventCallback,
@@ -386,6 +386,10 @@ fn credential_alias(url: &str) -> String {
 }
 
 impl OhosPlatform {
+    pub(super) fn font_catalog(&self) -> super::text_system::FontCatalog {
+        super::text_system::FontCatalog::new(self.text_system.clone())
+    }
+
     pub(crate) fn new(app: OpenHarmonyApp, options: super::PlatformOptions) -> Result<Self> {
         let (main_sender, main_receiver) = PriorityQueueReceiver::new();
         let dispatcher = Arc::new(OhosDispatcher::new(main_sender));
@@ -728,10 +732,10 @@ impl OhosPlatform {
                         .get(&window_id)
                         .and_then(Weak::upgrade)
                 });
-                if let Some(window) = window {
-                    if !OhosWindow::dispatch_window_menu_command(&window, action_id) {
-                        warn!("Unknown OHOS window menu item {id}");
-                    }
+                if let Some(window) = window
+                    && !OhosWindow::dispatch_window_menu_command(&window, action_id)
+                {
+                    warn!("Unknown OHOS window menu item {id}");
                 }
                 continue;
             }

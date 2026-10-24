@@ -4,6 +4,14 @@
 
 ### Breaking
 
+- Fixed-cell terminal shaping now requires the nondefault `grid` Cargo feature.
+  This includes `FontCatalog::layout_grid`, `GridLayoutRequest`,
+  `GridLayoutError`, and `GridTextCell`. Enable `gpui-ohos/grid` in terminal
+  consumers; ordinary GPUI text layout is unchanged.
+- `FontCatalog`, `PlatformServices`, `FontFaceData`, `FontDesignCoordinate`, and
+  `SyntheticFontStyle` are explicitly experimental APIs whose signatures may
+  change between releases. Runtime face identities and registered bytes remain
+  immutable.
 - Align with the native-only clipboard facade: remove HAR constructor options
   and implicit authorization reads; applications must arrange paste access or
   explicitly request `READ_PASTEBOARD` before native reads. Configure the existing
@@ -28,6 +36,12 @@
 - Restoration starts after the first successfully presented GPUI frame, without
   delaying GPU initialization or the launch callback. Restored workspace I/O must
   tolerate startup before grants are activated.
+
+### Changed
+
+- The text host harness uses the root workspace and lockfile. Original font
+  fixtures are generated during its build with the pinned fonttools requirement
+  instead of being stored as sixteen binary files.
 
 ### Fixed
 

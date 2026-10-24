@@ -1,0 +1,30 @@
+[package]
+name = "ohos-text-tests"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+grid = ["dep:harfrust"]
+
+[dependencies]
+anyhow.workspace = true
+cosmic-text.workspace = true
+harfrust = { workspace = true, optional = true }
+font-kit.workspace = true
+gpui.workspace = true
+itertools.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+smallvec.workspace = true
+unicode-segmentation.workspace = true
+swash.workspace = true
+unicode-script.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
+[lib]
+path = "lib.rs"
