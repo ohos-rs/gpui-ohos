@@ -15,9 +15,7 @@ use ohos_accessibility_binding::Provider;
 use openharmony_ability::{
     ArkUiInputEvent, AvoidAreaType, Event, ImeEvent, InputEvent, OpenHarmonyApp, PointerInputData,
     XComponentInputEvent,
-    arkui::arkui_input_binding::{
-        UIInputAction, UIInputEvent, UIInputSourceType, UIInputToolType,
-    },
+    arkui::arkui_input_binding::{UIInputAction, UIInputEvent, UIInputSourceType, UIInputToolType},
     arkui::component::attribute::{ArkUIAttributeBasic, ArkUICommonAttribute},
     ime::{
         Action as ImeAction, Direction as ImeDirection, EnterKey, IME, ImeResult, InputType,
@@ -51,9 +49,9 @@ use crate::{
     ForegroundExecutor, FrameRequestSource, GestureTuning, GpuSpecs, KeyDownEvent, Keystroke,
     Modifiers, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent,
     NavigationDirection, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
-    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, PromptStyle,
-    RequestFrameOptions, ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, Task,
-    TextInputAction, TextInputConfiguration, TextInputStateChange, TouchEvent, TouchId, TouchPhase,
+    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, Task, TextInputAction,
+    TextInputConfiguration, TextInputStateChange, TouchEvent, TouchId, TouchPhase,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
     WindowDecorations, WindowInsets, WindowParams, WindowVisibility, accesskit, point, px, size,
 };
@@ -3795,17 +3793,6 @@ impl PlatformWindow for OhosWindowHandle {
         self.with_window(|window| window.prompt(level, msg, detail, answers))
     }
 
-    fn prompt_with_style(
-        &self,
-        level: PromptLevel,
-        message: &str,
-        detail: Option<&str>,
-        answers: &[PromptButton],
-        style: Option<&PromptStyle>,
-    ) -> Option<oneshot::Receiver<usize>> {
-        self.with_window(|window| window.prompt_with_style(level, message, detail, answers, style))
-    }
-
     fn activate(&self) {
         self.with_window(|window| window.activate())
     }
@@ -4112,17 +4099,6 @@ impl PlatformWindow for OhosWindow {
         detail: Option<&str>,
         answers: &[PromptButton],
     ) -> Option<oneshot::Receiver<usize>> {
-        self.prompt_with_style(level, msg, detail, answers, None)
-    }
-
-    fn prompt_with_style(
-        &self,
-        level: PromptLevel,
-        msg: &str,
-        detail: Option<&str>,
-        answers: &[PromptButton],
-        style: Option<&PromptStyle>,
-    ) -> Option<oneshot::Receiver<usize>> {
         let client = self.window_client()?;
         if answers.is_empty() || answers.len() > 128 {
             return None;
@@ -4145,24 +4121,23 @@ impl PlatformWindow for OhosWindow {
                 .position(PromptButton::is_cancel)
                 .map(|index| index as u32),
             anchor: None,
-            appearance: style.map(|style| {
-                // GPUI packs RGBA; ArkUI numeric colors are ARGB.
-                let argb = |color: gpui::Rgba| u32::from(color).rotate_right(8);
-                openharmony_ability_plugin_window::WindowPromptAppearance {
-                    background: argb(style.background),
-                    foreground: argb(style.foreground),
-                    muted_foreground: argb(style.muted_foreground),
-                    primary: argb(style.primary),
-                    primary_foreground: argb(style.primary_foreground),
-                    border: argb(style.border),
-                    focus: argb(style.focus),
-                }
-            }),
+            appearance: None,
         };
         let (sender, receiver) = oneshot::channel();
+        let window = self
+            .window_index
+            .upgrade()
+            .and_then(|index| index.borrow().get(&self.window_id).cloned());
         self.foreground_executor
             .spawn(async move {
-                match client.show_prompt(request).await {
+                let result = client.show_prompt(request).await;
+                if let Some(window) = window.as_ref().and_then(Weak::upgrade) {
+                    let window = window.borrow();
+                    if !window.closed.get() && !window.released.get() {
+                        window.focus_native_surface();
+                    }
+                }
+                match result {
                     Ok(index) => {
                         if sender.send(index as usize).is_err() {
                             log::debug!("OHOS native prompt receiver was dropped");

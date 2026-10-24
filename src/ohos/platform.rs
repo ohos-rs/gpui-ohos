@@ -1390,8 +1390,9 @@ impl OhosPlatform {
         if matches!(event, Event::UserEvent) {
             self.handle_foreground_wake();
         }
-        self.dispatch_menu_events();
+        // Opening can share a wake with selection; reset shortcuts before the action.
         self.dispatch_menu_open_events();
+        self.dispatch_menu_events();
         self.dispatch_system_state_events();
         self.dispatch_notification_responses();
 
