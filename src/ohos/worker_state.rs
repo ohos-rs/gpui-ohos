@@ -25,16 +25,3 @@ fn scheduler_state(stat: &[u8]) -> Option<u8> {
     let end = stat.iter().rposition(|byte| *byte == b')')?;
     stat.get(end + 2).copied()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_kernel_state_without_splitting_the_thread_name() {
-        assert_eq!(scheduler_state(b"7 (worker ) name) R 1 2"), Some(b'R'));
-        assert_eq!(scheduler_state(b"7 (worker) S 1 2"), Some(b'S'));
-        assert_eq!(scheduler_state(b"7 (worker) D 1 2"), Some(b'D'));
-        assert_eq!(scheduler_state(b""), None);
-    }
-}

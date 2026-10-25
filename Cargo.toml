@@ -1,6 +1,6 @@
 [workspace]
 members = []
-exclude = ["example", "tests/touch", "example/ohos/vendor/openharmony-ability", "example/ohos/vendor/openharmony-ability/crates/*"]
+exclude = ["example", "example/ohos/vendor/openharmony-ability", "example/ohos/vendor/openharmony-ability/crates/*"]
 resolver = "2"
 
 [workspace.package]

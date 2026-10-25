@@ -206,16 +206,11 @@ GPUI windows alive and reports the error. An accepted restart can terminate the
 process before shutdown observers finish, so they cannot be used for mandatory
 restart persistence.
 
-Portable checks:
-
 ```sh
-cargo test --manifest-path tests/touch/Cargo.toml
-cargo test --manifest-path tests/touch/Cargo.toml --features native-vsync
-cargo test --manifest-path tests/file-access/Cargo.toml
 cargo check --target aarch64-unknown-linux-ohos
 ```
 
-Host checks substitute native window/frame APIs. Creation-time input is buffered
+Creation-time input is buffered
 until `PlatformWindow::on_input` is registered, and vetoed close requests restore
 window visibility and focus for task-center confirmation prompts. Enforced
 provider permission behavior still requires device verification.

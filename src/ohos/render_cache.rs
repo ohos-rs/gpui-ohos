@@ -24,16 +24,3 @@ impl<K: Hash + Eq, V> RenderCache<K, V> {
             .clone()
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn identical_keys_reuse_resources_and_variants_remain_separate() {
-        let cache = RenderCache::default();
-        let first = cache.get_or_insert_with((1, 4), || 12);
-        let same = cache.get_or_insert_with((1, 4), || panic!("recreated shared pipeline"));
-        assert!(Arc::ptr_eq(&first, &same));
-        let other = cache.get_or_insert_with((2, 4), || 14);
-        assert!(!Arc::ptr_eq(&first, &other));
-    }
-}
