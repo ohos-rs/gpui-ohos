@@ -1311,10 +1311,10 @@ impl OhosPlatform {
             if let Some(window) = window {
                 self.cursor_window_id.set(id);
                 window.borrow().handle_input_event(input);
-            } else {
+            } else if id == 0 {
                 const MAX_PENDING_WINDOW_INPUTS: usize = 64;
                 let mut pending = self.pending_window_inputs.borrow_mut();
-                let queue = pending.entry(id).or_default();
+                let queue = pending.entry(0).or_default();
                 if queue.len() >= MAX_PENDING_WINDOW_INPUTS {
                     queue.pop_front();
                 }

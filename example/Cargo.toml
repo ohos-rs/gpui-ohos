@@ -19,9 +19,9 @@ log = "0.4"
 ohos-hilog-binding = { version = "*", features = ["log"] }
 napi-derive-ohos = "=1.2.0"
 napi-ohos = "=1.2.0"
-openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "defe47e5d2e84047fe57e2f54fa978a5a8208ca5", version = "=1.0.0-beta.3" }
-openharmony-ability-derive = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "defe47e5d2e84047fe57e2f54fa978a5a8208ca5", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-permission = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "defe47e5d2e84047fe57e2f54fa978a5a8208ca5", version = "=1.0.0-beta.3" }
+openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
+openharmony-ability-derive = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-permission = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
 
 [features]
 default = ["gles", "api-26"]

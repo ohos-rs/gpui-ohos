@@ -259,7 +259,7 @@ struct WindowCallbacks {
     request_frame: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     input: Option<Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>>,
     input_registered: bool,
-    pending_inputs: VecDeque<PlatformInput>,
+    pending_inputs: VecDeque<InputEvent>,
     active_status_change: Option<Box<dyn FnMut(bool)>>,
     visibility_change: Option<Box<dyn FnMut(WindowVisibility)>>,
     insets_changed: Option<Box<dyn FnMut(WindowInsets)>>,
@@ -350,6 +350,7 @@ impl OhosWindow {
                 close();
             }
         } else {
+            let weak_window = Rc::downgrade(window);
             let window = window.borrow();
             if !window.closed.get()
                 && !window.released.get()
@@ -368,6 +369,12 @@ impl OhosWindow {
                             warn!(
                                 "Failed to focus OHOS window {window_id} after vetoed close: {error}"
                             );
+                        }
+                        if let Some(window) = weak_window.upgrade() {
+                            let window = window.borrow();
+                            if !window.closed.get() && !window.released.get() {
+                                window.focus_native_surface();
+                            }
                         }
                     })
                     .detach();
@@ -911,18 +918,7 @@ impl OhosWindow {
         callbacks: &Rc<RefCell<WindowCallbacks>>,
         input: PlatformInput,
     ) -> crate::DispatchEventResult {
-        let mut callback = {
-            let mut callbacks = callbacks.borrow_mut();
-            if !callbacks.input_registered {
-                const MAX_PENDING_INPUTS: usize = 64;
-                if callbacks.pending_inputs.len() >= MAX_PENDING_INPUTS {
-                    callbacks.pending_inputs.pop_front();
-                }
-                callbacks.pending_inputs.push_back(input);
-                return crate::DispatchEventResult::default();
-            }
-            callbacks.input.take()
-        };
+        let mut callback = callbacks.borrow_mut().input.take();
         let mut result = crate::DispatchEventResult::default();
         if let Some(ref mut cb) = callback {
             result = cb(input);
@@ -2857,6 +2853,15 @@ impl OhosWindow {
     }
 
     pub(crate) fn handle_input_event(&self, event: &InputEvent) {
+        if !self.callbacks.borrow().input_registered {
+            const MAX_PENDING_INPUTS: usize = 64;
+            let mut callbacks = self.callbacks.borrow_mut();
+            if callbacks.pending_inputs.len() >= MAX_PENDING_INPUTS {
+                callbacks.pending_inputs.pop_front();
+            }
+            callbacks.pending_inputs.push_back(event.clone());
+            return;
+        }
         let pointer_activation = match event {
             InputEvent::XComponent(XComponentInputEvent::Mouse(event)) => {
                 event.action == MouseAction::Press
@@ -4434,18 +4439,36 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>) {
-        let pending = {
+        let has_pending = {
             let mut callbacks = self.callbacks.borrow_mut();
             callbacks.input_registered = true;
             callbacks.input = Some(callback);
-            std::mem::take(&mut callbacks.pending_inputs)
+            !callbacks.pending_inputs.is_empty()
         };
-        if !pending.is_empty() {
-            let callbacks = self.callbacks.clone();
+        if has_pending
+            && let Some(window) = self
+                .window_index
+                .upgrade()
+                .and_then(|index| index.borrow().get(&self.window_id).cloned())
+        {
             self.foreground_executor
                 .spawn(async move {
-                    for input in pending {
-                        Self::dispatch_input_with_callbacks(&callbacks, input);
+                    loop {
+                        let Some(window) = window.upgrade() else {
+                            return;
+                        };
+                        let next = {
+                            let window = window.borrow();
+                            if window.closed.get() || window.released.get() {
+                                window.callbacks.borrow_mut().pending_inputs.clear();
+                                return;
+                            }
+                            window.callbacks.borrow_mut().pending_inputs.pop_front()
+                        };
+                        let Some(input) = next else {
+                            return;
+                        };
+                        window.borrow().handle_input_event(&input);
                     }
                 })
                 .detach();

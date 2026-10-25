@@ -177,7 +177,7 @@ git submodule update --init --recursive
 ```
 
 Rust dependencies use the authorized coherent Ability integration revision
-`defe47e5d2e84047fe57e2f54fa978a5a8208ca5` from `openharmony-ability`
+`8d66b703f9044a966eaedd720a61ed797049982d` from `openharmony-ability` `main`
 ([Ability #109](https://github.com/harmony-contrib/openharmony-ability/pull/109) +
 non-activating Ability window launch focus restoration);
 the example's ArkTS submodule uses that same commit. The library no longer reads
