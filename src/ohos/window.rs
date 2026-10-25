@@ -2763,6 +2763,7 @@ impl OhosWindow {
                 self.update_visibility(WindowVisibility::Hidden);
                 self.active.set(false);
                 self.set_hovered(false);
+                self.callbacks.borrow_mut().pending_inputs.clear();
                 if self.refresh_keyboard_overlap_device_px() {
                     self.emit_visual_viewport_changed();
                 }
@@ -2853,15 +2854,24 @@ impl OhosWindow {
     }
 
     pub(crate) fn handle_input_event(&self, event: &InputEvent) {
-        if !self.callbacks.borrow().input_registered {
-            const MAX_PENDING_INPUTS: usize = 64;
-            let mut callbacks = self.callbacks.borrow_mut();
-            if callbacks.pending_inputs.len() >= MAX_PENDING_INPUTS {
-                callbacks.pending_inputs.pop_front();
-            }
-            callbacks.pending_inputs.push_back(event.clone());
+        if self.closed.get() || self.released.get() {
             return;
         }
+        {
+            let mut callbacks = self.callbacks.borrow_mut();
+            if !callbacks.input_registered || !callbacks.pending_inputs.is_empty() {
+                const MAX_PENDING_INPUTS: usize = 64;
+                if callbacks.pending_inputs.len() >= MAX_PENDING_INPUTS {
+                    callbacks.pending_inputs.pop_front();
+                }
+                callbacks.pending_inputs.push_back(event.clone());
+                return;
+            }
+        }
+        self.dispatch_input_event(event);
+    }
+
+    fn dispatch_input_event(&self, event: &InputEvent) {
         let pointer_activation = match event {
             InputEvent::XComponent(XComponentInputEvent::Mouse(event)) => {
                 event.action == MouseAction::Press
@@ -4439,39 +4449,42 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>) {
-        let has_pending = {
+        let should_replay = {
             let mut callbacks = self.callbacks.borrow_mut();
-            callbacks.input_registered = true;
+            let was_registered = std::mem::replace(&mut callbacks.input_registered, true);
             callbacks.input = Some(callback);
-            !callbacks.pending_inputs.is_empty()
+            !was_registered && !callbacks.pending_inputs.is_empty()
         };
-        if has_pending
-            && let Some(window) = self
+        if should_replay {
+            if let Some(window) = self
                 .window_index
                 .upgrade()
                 .and_then(|index| index.borrow().get(&self.window_id).cloned())
-        {
-            self.foreground_executor
-                .spawn(async move {
-                    loop {
-                        let Some(window) = window.upgrade() else {
-                            return;
-                        };
-                        let next = {
-                            let window = window.borrow();
-                            if window.closed.get() || window.released.get() {
-                                window.callbacks.borrow_mut().pending_inputs.clear();
+            {
+                self.foreground_executor
+                    .spawn(async move {
+                        loop {
+                            let Some(window) = window.upgrade() else {
                                 return;
-                            }
-                            window.callbacks.borrow_mut().pending_inputs.pop_front()
-                        };
-                        let Some(input) = next else {
-                            return;
-                        };
-                        window.borrow().handle_input_event(&input);
-                    }
-                })
-                .detach();
+                            };
+                            let next = {
+                                let window = window.borrow();
+                                if window.closed.get() || window.released.get() {
+                                    window.callbacks.borrow_mut().pending_inputs.clear();
+                                    return;
+                                }
+                                window.callbacks.borrow_mut().pending_inputs.pop_front()
+                            };
+                            let Some(input) = next else {
+                                return;
+                            };
+                            window.borrow().dispatch_input_event(&input);
+                        }
+                    })
+                    .detach();
+            } else {
+                self.callbacks.borrow_mut().pending_inputs.clear();
+            }
         }
     }
 
