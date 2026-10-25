@@ -177,8 +177,9 @@ git submodule update --init --recursive
 ```
 
 Rust dependencies use the authorized coherent Ability integration revision
-`9085050a6c8dcb02fa297a6f44c4795160c93f86` from `openharmony-ability` `main`
-([Ability #109](https://github.com/harmony-contrib/openharmony-ability/pull/109));
+`defe47e5d2e84047fe57e2f54fa978a5a8208ca5` from `openharmony-ability`
+([Ability #109](https://github.com/harmony-contrib/openharmony-ability/pull/109) +
+non-activating Ability window launch focus restoration);
 the example's ArkTS submodule uses that same commit. The library no longer reads
 Rust sources from `example/`.
 It includes unpublished runtime interfaces; using registry beta.3 for only one
@@ -214,6 +215,7 @@ cargo test --manifest-path tests/file-access/Cargo.toml
 cargo check --target aarch64-unknown-linux-ohos
 ```
 
-Host checks substitute native window/frame APIs. Native creation-time input
-routing, task-center close confirmation and enforced provider permission behavior
-still need further work; this does not establish complete desktop parity.
+Host checks substitute native window/frame APIs. Creation-time input is buffered
+until `PlatformWindow::on_input` is registered, and vetoed close requests restore
+window visibility and focus for task-center confirmation prompts. Enforced
+provider permission behavior still requires device verification.

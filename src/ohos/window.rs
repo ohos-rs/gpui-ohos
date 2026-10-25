@@ -2,7 +2,7 @@ use log::{debug, info, warn};
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     rc::{Rc, Weak},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -258,6 +258,8 @@ impl OhosWindowHandle {
 struct WindowCallbacks {
     request_frame: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     input: Option<Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>>,
+    input_registered: bool,
+    pending_inputs: VecDeque<PlatformInput>,
     active_status_change: Option<Box<dyn FnMut(bool)>>,
     visibility_change: Option<Box<dyn FnMut(WindowVisibility)>>,
     insets_changed: Option<Box<dyn FnMut(WindowInsets)>>,
@@ -346,6 +348,29 @@ impl OhosWindow {
             let close = callbacks.borrow_mut().close.take();
             if let Some(close) = close {
                 close();
+            }
+        } else {
+            let window = window.borrow();
+            if !window.closed.get()
+                && !window.released.get()
+                && let Some(client) = window.window_client()
+            {
+                let window_id = window.window_id;
+                window
+                    .foreground_executor
+                    .spawn(async move {
+                        if let Err(error) = client.show_window(window_id).await {
+                            warn!(
+                                "Failed to show OHOS window {window_id} after vetoed close: {error}"
+                            );
+                        }
+                        if let Err(error) = client.focus_window(window_id).await {
+                            warn!(
+                                "Failed to focus OHOS window {window_id} after vetoed close: {error}"
+                            );
+                        }
+                    })
+                    .detach();
             }
         }
     }
@@ -698,6 +723,8 @@ impl OhosWindow {
             callbacks: Rc::new(RefCell::new(WindowCallbacks {
                 request_frame: None,
                 input: None,
+                input_registered: false,
+                pending_inputs: VecDeque::new(),
                 active_status_change: None,
                 visibility_change: None,
                 insets_changed: None,
@@ -884,7 +911,18 @@ impl OhosWindow {
         callbacks: &Rc<RefCell<WindowCallbacks>>,
         input: PlatformInput,
     ) -> crate::DispatchEventResult {
-        let mut callback = callbacks.borrow_mut().input.take();
+        let mut callback = {
+            let mut callbacks = callbacks.borrow_mut();
+            if !callbacks.input_registered {
+                const MAX_PENDING_INPUTS: usize = 64;
+                if callbacks.pending_inputs.len() >= MAX_PENDING_INPUTS {
+                    callbacks.pending_inputs.pop_front();
+                }
+                callbacks.pending_inputs.push_back(input);
+                return crate::DispatchEventResult::default();
+            }
+            callbacks.input.take()
+        };
         let mut result = crate::DispatchEventResult::default();
         if let Some(ref mut cb) = callback {
             result = cb(input);
@@ -4396,7 +4434,22 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> crate::DispatchEventResult>) {
-        self.callbacks.borrow_mut().input = Some(callback);
+        let pending = {
+            let mut callbacks = self.callbacks.borrow_mut();
+            callbacks.input_registered = true;
+            callbacks.input = Some(callback);
+            std::mem::take(&mut callbacks.pending_inputs)
+        };
+        if !pending.is_empty() {
+            let callbacks = self.callbacks.clone();
+            self.foreground_executor
+                .spawn(async move {
+                    for input in pending {
+                        Self::dispatch_input_with_callbacks(&callbacks, input);
+                    }
+                })
+                .detach();
+        }
     }
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>) {

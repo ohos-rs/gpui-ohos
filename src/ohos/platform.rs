@@ -89,6 +89,7 @@ pub(crate) struct OhosPlatform {
     gpu_context: Arc<OnceLock<Result<Arc<WgpuContext>, String>>>,
     windows: Rc<RefCell<Vec<Weak<RefCell<OhosWindow>>>>>,
     window_index: Rc<RefCell<FxHashMap<i64, Weak<RefCell<OhosWindow>>>>>,
+    pending_window_inputs: Rc<RefCell<FxHashMap<i64, VecDeque<openharmony_ability::InputEvent>>>>,
     frame_callback_active: Rc<Cell<bool>>,
     open_urls: OpenUrlsCallback,
     pending_open_uris: Rc<RefCell<VecDeque<String>>>,
@@ -483,6 +484,7 @@ impl OhosPlatform {
             gpu_context,
             windows: Rc::new(RefCell::new(Vec::new())),
             window_index: Rc::new(RefCell::new(FxHashMap::default())),
+            pending_window_inputs: Rc::new(RefCell::new(FxHashMap::default())),
             frame_callback_active: Rc::new(Cell::new(false)),
             open_urls: Rc::new(RefCell::new(None)),
             pending_open_uris: Rc::new(RefCell::new(VecDeque::new())),
@@ -1309,6 +1311,14 @@ impl OhosPlatform {
             if let Some(window) = window {
                 self.cursor_window_id.set(id);
                 window.borrow().handle_input_event(input);
+            } else {
+                const MAX_PENDING_WINDOW_INPUTS: usize = 64;
+                let mut pending = self.pending_window_inputs.borrow_mut();
+                let queue = pending.entry(id).or_default();
+                if queue.len() >= MAX_PENDING_WINDOW_INPUTS {
+                    queue.pop_front();
+                }
+                queue.push_back(input.clone());
             }
             return;
         }
@@ -1477,7 +1487,13 @@ impl OhosPlatform {
         // FloatPage reports native close-button and system closes through this
         // queue. GPUI must consume it so its window registry and close observers
         // are updated even when no SubWindowClosed event is emitted.
+        if let Event::SubWindowClosed(window_id) = event {
+            self.pending_window_inputs.borrow_mut().remove(window_id);
+        }
         for window_id in drain_pending_window_closes() {
+            self.pending_window_inputs
+                .borrow_mut()
+                .remove(&i64::from(window_id));
             self.invalidate_window_stack();
             if let Some(window) = live_windows
                 .iter()
@@ -1547,6 +1563,7 @@ impl OhosPlatform {
 
         if matches!(event, Event::Destroy) {
             self.pending_open_uris.borrow_mut().clear();
+            self.pending_window_inputs.borrow_mut().clear();
             for window in &live_windows {
                 window.borrow().handle_event(&Event::WindowDestroy);
             }
@@ -1728,6 +1745,7 @@ impl Clone for OhosPlatform {
             gpu_context: self.gpu_context.clone(),
             windows: self.windows.clone(),
             window_index: self.window_index.clone(),
+            pending_window_inputs: self.pending_window_inputs.clone(),
             frame_callback_active: self.frame_callback_active.clone(),
             open_urls: self.open_urls.clone(),
             pending_open_uris: self.pending_open_uris.clone(),
@@ -2130,6 +2148,14 @@ impl Platform for OhosPlatform {
             self.window_index
                 .borrow_mut()
                 .insert(window_id, Rc::downgrade(&window));
+            if let Some(pending) = self.pending_window_inputs.borrow_mut().remove(&window_id)
+                && !pending.is_empty()
+            {
+                self.cursor_window_id.set(window_id);
+                for input in pending {
+                    window.borrow().handle_input_event(&input);
+                }
+            }
             self.invalidate_window_stack();
             Ok(Box::new(super::window::OhosWindowHandle::new(window)))
         } else {
