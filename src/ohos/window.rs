@@ -3419,9 +3419,7 @@ impl OhosWindow {
                     drag.response.accept();
                     super::platform::retain_file_access(
                         self.file_access.clone(),
-                        self.app.borrow().clone(),
                         &self.background_executor,
-                        self.window_id,
                         drag.file_uris.clone(),
                     );
                 }

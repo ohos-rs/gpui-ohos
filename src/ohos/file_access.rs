@@ -1,7 +1,6 @@
 use anyhow::{Context as _, Result};
 use ohos_fileshare_binding::PolicyInfo;
 use parking_lot::Mutex;
-use serde::de::{MapAccess, Visitor};
 use std::{
     collections::BTreeMap,
     io::{Read as _, Write as _},
@@ -284,32 +283,16 @@ impl FileAccess {
             contents.len() as u64 <= MAX_HISTORY_BYTES,
             "File access history exceeds {MAX_HISTORY_BYTES} bytes"
         );
-        struct History;
-        impl<'de> Visitor<'de> for History {
-            type Value = BTreeMap<String, u32>;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(formatter, "at most {MAX_GRANTS} file grants")
-            }
-
-            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-                let mut policies = BTreeMap::new();
-                let mut count = 0;
-                while let Some((uri, mode)) = map.next_entry::<String, u32>()? {
-                    count += 1;
-                    if count > MAX_GRANTS || !valid_uri(&uri) || !matches!(mode, READ | READ_WRITE)
-                    {
-                        return Err(serde::de::Error::custom("Invalid or excessive file grants"));
-                    }
-                    policies.insert(uri, mode);
-                }
-                Ok(policies)
-            }
-        }
-        let mut deserializer = serde_json::Deserializer::from_slice(&contents);
-        let policies = serde::de::Deserializer::deserialize_map(&mut deserializer, History)
+        let policies: BTreeMap<String, u32> = serde_json::from_slice(&contents)
             .with_context(|| format!("Read file access history {}", path.display()))?;
-        deserializer.end()?;
+        anyhow::ensure!(
+            policies.len() <= MAX_GRANTS
+                && policies
+                    .iter()
+                    .all(|(uri, mode)| valid_uri(uri) && matches!(*mode, READ | READ_WRITE)),
+            "Invalid or excessive file grants in {}",
+            path.display()
+        );
         Ok(policies)
     }
 

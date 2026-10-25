@@ -1233,13 +1233,7 @@ impl OhosPlatform {
         }
         // The Want already grants access for this process. Keep the initial open
         // callback synchronous so Zed selects its workspace before startup continues.
-        retain_file_access(
-            self.file_access.clone(),
-            self.app.borrow().clone(),
-            &self.background_executor,
-            0,
-            grants,
-        );
+        retain_file_access(self.file_access.clone(), &self.background_executor, grants);
         if !urls.is_empty() {
             callback(urls);
         }
@@ -1352,6 +1346,12 @@ impl OhosPlatform {
                 }
                 *self.keyboard_layout_change.borrow_mut() = callback;
             }
+        }
+        if matches!(
+            event,
+            Event::Start | Event::GainedFocus | Event::WindowFocusChanged { focused: true, .. }
+        ) {
+            self.clipboard.refresh_if_needed();
         }
         let phase = match event {
             Event::Start => Some(AppLifecyclePhase::Foreground),
@@ -1601,9 +1601,7 @@ pub(super) fn set_cursor_visibility(
 
 pub(super) fn retain_file_access(
     file_access: Arc<super::file_access::FileAccess>,
-    app: Option<OpenHarmonyApp>,
     executor: &BackgroundExecutor,
-    window_id: i64,
     uris: Vec<String>,
 ) {
     if uris.is_empty() {
@@ -1613,17 +1611,6 @@ pub(super) fn retain_file_access(
         .spawn(async move {
             if let Err(error) = file_access.remember(&uris, false) {
                 warn!("Could not save incoming file access: {error:#}");
-                if let Some(app) = app {
-                    show_platform_error(
-                        app,
-                        window_id,
-                        "File access could not be saved",
-                        format!(
-                            "You may need to reopen the file from its original application after restarting.\n\n{error:#}"
-                        ),
-                    )
-                    .await;
-                }
             }
         })
         .detach();
@@ -1673,11 +1660,9 @@ fn normalize_open_uri(uri: String) -> Result<(String, Option<String>)> {
         .map_err(|()| anyhow::anyhow!("File URI resolved to a non-absolute path: {path}"))
 }
 
-async fn selected_paths(
+fn selected_paths(
     uris: Vec<String>,
     file_access: &super::file_access::FileAccess,
-    app: OpenHarmonyApp,
-    window_id: i64,
     writable: bool,
 ) -> Result<Option<Vec<PathBuf>>> {
     if uris.is_empty() {
@@ -1686,9 +1671,6 @@ async fn selected_paths(
     let paths = resolve_file_paths(&uris)?;
     if let Err(error) = file_access.remember(&uris, writable) {
         warn!("Could not save file picker access: {error:#}");
-        show_platform_error(app, window_id, "File access could not be saved", format!(
-            "This selection is available now, but you may need to select it again after restarting.\n\n{error:#}"
-        )).await;
     }
     Ok(Some(paths))
 }
@@ -2349,14 +2331,7 @@ impl Platform for OhosPlatform {
                     let mut options = FileDialogOptions::new(kind).allow_many(options.multiple);
                     options.parent_window_id = parent_window_id;
                     let response = app.show_file_dialog(options).await?;
-                    selected_paths(
-                        response.files,
-                        &file_access,
-                        app,
-                        parent_window_id.unwrap_or(0),
-                        false,
-                    )
-                    .await
+                    selected_paths(response.files, &file_access, false)
                 }
                 .await;
                 tx.send(result).ok();
@@ -2399,15 +2374,8 @@ impl Platform for OhosPlatform {
                     options.suggested_name = suggested_name;
                     options.parent_window_id = parent_window_id;
                     let response = app.show_file_dialog(options).await?;
-                    Ok(selected_paths(
-                        response.files,
-                        &file_access,
-                        app,
-                        parent_window_id.unwrap_or(0),
-                        true,
-                    )
-                    .await?
-                    .and_then(|mut paths| paths.pop()))
+                    Ok(selected_paths(response.files, &file_access, true)?
+                        .and_then(|mut paths| paths.pop()))
                 }
                 .await;
                 tx.send(result).ok();

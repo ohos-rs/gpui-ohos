@@ -381,4 +381,44 @@ mod tests {
         assert_eq!(h.run(second).unwrap(), None);
         assert_eq!(h.app.0.clipboard.calls.lock().unwrap().len(), 2);
     }
+
+    #[test]
+    fn write_and_focus_refresh_warm_synchronous_cache() {
+        let h = Harness::new();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        *h.app.0.clipboard.write_gate.lock().unwrap() = Some((started_tx, resume_rx));
+        let write = h.clipboard.write(ClipboardItem::new_string("in-app".into()));
+        assert_eq!(
+            h.clipboard.read_cached().unwrap().text().as_deref(),
+            Some("in-app")
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while started_rx.try_recv().is_err() {
+            assert!(Instant::now() < deadline);
+            h.pump();
+        }
+        resume_tx.send(()).unwrap();
+        h.run(write).unwrap();
+        assert_eq!(
+            h.clipboard.read_cached().unwrap().text().as_deref(),
+            Some("in-app")
+        );
+
+        *h.app.0.clipboard.records.lock().unwrap() = vec![ClipboardRecord {
+            text: Some("external".into()),
+            ..Default::default()
+        }];
+        h.app.0.clipboard.revision.fetch_add(1, Ordering::SeqCst);
+        h.clipboard.refresh_if_needed();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while h.clipboard.read_cached().is_none() {
+            assert!(Instant::now() < deadline);
+            h.pump();
+        }
+        assert_eq!(
+            h.clipboard.read_cached().unwrap().text().as_deref(),
+            Some("external")
+        );
+    }
 }

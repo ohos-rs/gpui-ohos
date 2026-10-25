@@ -27,7 +27,8 @@ pub(crate) struct OhosClipboard {
     app: Rc<RefCell<Option<OpenHarmonyApp>>>,
     foreground_executor: ForegroundExecutor,
     background_executor: BackgroundExecutor,
-    cache: Rc<RefCell<Option<(u32, ClipboardItem)>>>,
+    cache: Rc<RefCell<Option<(u32, Option<ClipboardItem>)>>>,
+    pending_write_item: Rc<RefCell<Option<(u64, Option<ClipboardItem>)>>>,
     operation: Rc<Cell<u64>>,
     refresh_pending: Rc<Cell<bool>>,
     write_tail: Rc<RefCell<Option<Shared<LocalBoxFuture<'static, ()>>>>>,
@@ -45,6 +46,7 @@ impl OhosClipboard {
             foreground_executor,
             background_executor,
             cache: Rc::new(RefCell::new(None)),
+            pending_write_item: Rc::new(RefCell::new(None)),
             operation: Rc::new(Cell::new(0)),
             refresh_pending: Rc::new(Cell::new(false)),
             write_tail: Rc::new(RefCell::new(None)),
@@ -72,14 +74,7 @@ impl OhosClipboard {
         next
     }
 
-    pub(crate) fn read_cached(&self) -> Option<ClipboardItem> {
-        let revision = self.app.borrow().as_ref().and_then(Self::revision);
-        if let Some((cached_revision, item)) = self.cache.borrow().as_ref()
-            && Some(*cached_revision) == revision
-        {
-            return Some(item.clone());
-        }
-        *self.cache.borrow_mut() = None;
+    fn schedule_refresh(&self) {
         if self.app.borrow().is_some() && !self.refresh_pending.replace(true) {
             let clipboard = self.clone();
             self.foreground_executor
@@ -91,6 +86,41 @@ impl OhosClipboard {
                 })
                 .detach();
         }
+    }
+
+    pub(crate) fn refresh_if_needed(&self) {
+        if self.pending_write_item.borrow().is_some() {
+            return;
+        }
+        let revision = self.app.borrow().as_ref().and_then(Self::revision);
+        if let Some(revision) = revision {
+            if self
+                .cache
+                .borrow()
+                .as_ref()
+                .is_some_and(|(cached_revision, _)| *cached_revision == revision)
+            {
+                return;
+            }
+            *self.cache.borrow_mut() = None;
+            self.schedule_refresh();
+        } else {
+            *self.cache.borrow_mut() = None;
+        }
+    }
+
+    pub(crate) fn read_cached(&self) -> Option<ClipboardItem> {
+        if let Some((_, item)) = self.pending_write_item.borrow().as_ref() {
+            return item.clone();
+        }
+        let revision = self.app.borrow().as_ref().and_then(Self::revision);
+        if let Some((cached_revision, item)) = self.cache.borrow().as_ref()
+            && Some(*cached_revision) == revision
+        {
+            return item.clone();
+        }
+        *self.cache.borrow_mut() = None;
+        self.schedule_refresh();
         None
     }
 
@@ -169,7 +199,8 @@ impl OhosClipboard {
                     }
                     let item = (!entries.is_empty()).then_some(ClipboardItem { entries });
                     if clipboard.operation.get() == operation {
-                        *clipboard.cache.borrow_mut() = revision.zip(item.clone());
+                        *clipboard.cache.borrow_mut() =
+                            revision.map(|revision| (revision, item.clone()));
                     }
                     Ok(item)
                 });
@@ -229,8 +260,15 @@ impl OhosClipboard {
                 }
             }
         }
+        let plugin = app
+            .registered_plugin::<ClipboardBridgePlugin>()
+            .ok()
+            .flatten();
+        let cached_item = (!item.entries().is_empty()).then(|| item.clone());
         let clipboard = self.clone();
         let operation = self.next_operation();
+        *self.cache.borrow_mut() = None;
+        *self.pending_write_item.borrow_mut() = Some((operation, cached_item.clone()));
         let previous = self.write_tail.borrow().clone();
         let (complete, completion) = oneshot::channel();
         *self.write_tail.borrow_mut() = Some(
@@ -253,18 +291,31 @@ impl OhosClipboard {
                         } else {
                             client.write_records(records).await?;
                         }
-                        Ok::<_, ClipboardError>(())
+                        let after = plugin.as_deref().and_then(query_revision);
+                        Ok::<_, ClipboardError>(after)
                     })
                     .await;
+                if clipboard
+                    .pending_write_item
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|(pending_op, _)| *pending_op == operation)
+                {
+                    *clipboard.pending_write_item.borrow_mut() = None;
+                }
                 let result = result
-                    .map(|()| {
+                    .map(|revision| {
                         if clipboard.operation.get() == operation {
-                            // A different application can write between SetData and a
-                            // counter query; only native read snapshots seed the cache.
-                            *clipboard.cache.borrow_mut() = None;
+                            *clipboard.cache.borrow_mut() =
+                                revision.map(|revision| (revision, cached_item));
                         }
                     })
-                    .map_err(anyhow::Error::from);
+                    .map_err(|error| {
+                        if clipboard.operation.get() == operation {
+                            *clipboard.cache.borrow_mut() = None;
+                        }
+                        anyhow::Error::from(error)
+                    });
                 let _ = complete.send(());
                 if let Err(Err(error)) = sender.send(result) {
                     log::warn!("Abandoned OHOS clipboard write failed: {error}");
