@@ -8,3 +8,9 @@ mod ohos;
 
 pub use gpui::*;
 pub use ohos::{PlatformOptions, current_platform, try_current_platform};
+
+pub use ohos::{
+    FontCatalog, FontDesignCoordinate, FontFaceData, PlatformServices, SyntheticFontStyle,
+};
+#[cfg(feature = "grid")]
+pub use ohos::{GridLayoutError, GridLayoutRequest, GridTextCell};
