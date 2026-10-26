@@ -131,6 +131,7 @@ pub struct WgpuRenderer {
     adapter_info: wgpu::AdapterInfo,
     path_vertices: RefCell<Vec<PathRasterizationVertex>>,
     path_sprites: RefCell<Vec<PathSprite>>,
+    path_batch_bounds: RefCell<Vec<Bounds<ScaledPixels>>>,
     polychrome_sprites: RefCell<Vec<PolychromeSprite>>,
 }
 
@@ -381,6 +382,7 @@ impl WgpuRenderer {
             adapter_info,
             path_vertices: RefCell::new(Vec::new()),
             path_sprites: RefCell::new(Vec::new()),
+            path_batch_bounds: RefCell::new(Vec::new()),
             polychrome_sprites: RefCell::new(Vec::new()),
         };
         renderer.write_global_params(true);
@@ -1263,7 +1265,22 @@ impl WgpuRenderer {
                     label: Some("main_encoder"),
                 });
 
-            {
+            let mut rasterized_paths_end = 0;
+            if !scene.paths.is_empty() {
+                let initial_paths = self.next_coalesced_path_range(scene, 0);
+                if !initial_paths.is_empty() {
+                    if !self.draw_paths_to_intermediate(
+                        &mut encoder,
+                        &scene.paths[initial_paths.clone()],
+                        &mut instance_offset,
+                    ) {
+                        overflow = true;
+                    }
+                    rasterized_paths_end = initial_paths.end;
+                }
+            }
+
+            if !overflow {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("main_pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1278,6 +1295,7 @@ impl WgpuRenderer {
                     depth_stencil_attachment: None,
                     ..Default::default()
                 });
+                pass.set_bind_group(0, &self.globals_bind_group, &[]);
 
                 for batch in scene.batches() {
                     let ok = match batch {
@@ -1291,43 +1309,49 @@ impl WgpuRenderer {
                             &mut pass,
                         ),
                         PrimitiveBatch::Paths(range) => {
-                            let paths = &scene.paths[range];
+                            let paths = &scene.paths[range.clone()];
                             if paths.is_empty() {
                                 continue;
                             }
 
-                            drop(pass);
+                            if range.end > rasterized_paths_end {
+                                drop(pass);
 
-                            let did_draw = self.draw_paths_to_intermediate(
-                                &mut encoder,
+                                let next_paths = self.next_coalesced_path_range(scene, range.start);
+                                let did_draw = self.draw_paths_to_intermediate(
+                                    &mut encoder,
+                                    &scene.paths[next_paths.clone()],
+                                    &mut instance_offset,
+                                );
+                                rasterized_paths_end = next_paths.end;
+
+                                pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("main_pass_continued"),
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: &frame_view,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations {
+                                            load: wgpu::LoadOp::Load,
+                                            store: wgpu::StoreOp::Store,
+                                        },
+                                        depth_slice: None,
+                                    })],
+                                    depth_stencil_attachment: None,
+                                    ..Default::default()
+                                });
+                                pass.set_bind_group(0, &self.globals_bind_group, &[]);
+
+                                if !did_draw {
+                                    overflow = true;
+                                    break;
+                                }
+                            }
+
+                            self.draw_paths_from_intermediate(
                                 paths,
                                 &mut instance_offset,
-                            );
-
-                            pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("main_pass_continued"),
-                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &frame_view,
-                                    resolve_target: None,
-                                    ops: wgpu::Operations {
-                                        load: wgpu::LoadOp::Load,
-                                        store: wgpu::StoreOp::Store,
-                                    },
-                                    depth_slice: None,
-                                })],
-                                depth_stencil_attachment: None,
-                                ..Default::default()
-                            });
-
-                            if did_draw {
-                                self.draw_paths_from_intermediate(
-                                    paths,
-                                    &mut instance_offset,
-                                    &mut pass,
-                                )
-                            } else {
-                                false
-                            }
+                                &mut pass,
+                            )
                         }
                         PrimitiveBatch::Underlines(range) => self.draw_instances(
                             range,
@@ -1484,7 +1508,6 @@ impl WgpuRenderer {
         let offset = binding.offset + range.start as u64 * binding.stride;
         let size = range.len() as u64 * binding.stride;
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &self.globals_bind_group, &[]);
         pass.set_vertex_buffer(0, self.instance_buffer.slice(offset..offset + size));
         pass.draw(0..4, 0..instance_count);
         true
@@ -1505,7 +1528,6 @@ impl WgpuRenderer {
         let offset = binding.offset + range.start as u64 * binding.stride;
         let size = range.len() as u64 * binding.stride;
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &self.globals_bind_group, &[]);
         pass.set_bind_group(1, texture_bind_group, &[]);
         pass.set_vertex_buffer(0, self.instance_buffer.slice(offset..offset + size));
         pass.draw(0..4, 0..instance_count);
@@ -1549,12 +1571,19 @@ impl WgpuRenderer {
                 start,
                 NonZeroU64::new(end - start)?,
             )?;
-            upload.slice(..).fill(0);
+            let mut cursor = 0usize;
             for (offset, bytes) in offsets.into_iter().zip(data) {
                 let offset = (offset - start) as usize;
-                upload
-                    .slice(offset..offset + bytes.len())
-                    .copy_from_slice(bytes);
+                if cursor < offset {
+                    upload.slice(cursor..offset).fill(0);
+                }
+                let data_end = offset + bytes.len();
+                upload.slice(offset..data_end).copy_from_slice(bytes);
+                cursor = data_end;
+            }
+            let total_len = (end - start) as usize;
+            if cursor < total_len {
+                upload.slice(cursor..total_len).fill(0);
             }
         }
         *instance_offset = end;
@@ -1595,12 +1624,62 @@ impl WgpuRenderer {
         }
     }
 
+    fn padded_path_batch_bounds(paths: &[Path<ScaledPixels>]) -> Bounds<ScaledPixels> {
+        let mut bounds = paths[0].clipped_bounds();
+        for path in paths.iter().skip(1) {
+            bounds = bounds.union(&path.clipped_bounds());
+        }
+        // Pad by 1 device pixel on each side for linear-filtered intermediate sampling.
+        Bounds {
+            origin: Point {
+                x: ScaledPixels(bounds.origin.x.0 - 1.0),
+                y: ScaledPixels(bounds.origin.y.0 - 1.0),
+            },
+            size: Size {
+                width: ScaledPixels(bounds.size.width.0 + 2.0),
+                height: ScaledPixels(bounds.size.height.0 + 2.0),
+            },
+        }
+    }
+
+    fn next_coalesced_path_range(&self, scene: &Scene, start_path_index: usize) -> Range<usize> {
+        let mut group_bounds = self.path_batch_bounds.borrow_mut();
+        group_bounds.clear();
+        let mut group_end = start_path_index;
+
+        for batch in scene.batches() {
+            let PrimitiveBatch::Paths(range) = batch else {
+                continue;
+            };
+            if range.end <= start_path_index {
+                continue;
+            }
+            let paths = &scene.paths[range.clone()];
+            if paths.is_empty() {
+                group_end = range.end;
+                continue;
+            }
+            let bounds = Self::padded_path_batch_bounds(paths);
+            if !group_bounds.is_empty() && group_bounds.iter().any(|prev| prev.intersects(&bounds))
+            {
+                break;
+            }
+            group_bounds.push(bounds);
+            group_end = range.end;
+        }
+
+        start_path_index..group_end
+    }
+
     fn draw_paths_from_intermediate(
         &self,
         paths: &[Path<ScaledPixels>],
         instance_offset: &mut u64,
         pass: &mut wgpu::RenderPass<'_>,
     ) -> bool {
+        if paths.iter().all(|p| p.vertices.is_empty()) {
+            return true;
+        }
         let first_path = &paths[0];
         let mut sprites = self.path_sprites.borrow_mut();
         sprites.clear();
