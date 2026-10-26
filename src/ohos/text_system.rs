@@ -988,72 +988,74 @@ impl OhosTextSystemState {
         key: CacheKey,
         style: SyntheticFontStyle,
         id: FontId,
-    ) -> Option<cosmic_text::SwashImage> {
+    ) -> Option<&cosmic_text::SwashImage> {
         let loaded = self.loaded_font(id);
         let varied = !loaded.design_coordinates.is_empty();
         if style == SyntheticFontStyle::default() && !varied {
             return self
                 .swash_cache
                 .get_image(&mut self.font_system, key)
-                .clone();
+                .as_ref();
         }
         let identity = if varied { id } else { FontId(0) };
-        if let Some(image) = self.synthetic_images.get(&(key, style, identity)) {
-            return image.clone();
-        }
-        let font = loaded.font.clone();
-        let coordinates = loaded.coordinates.clone();
-        let face = font.as_swash();
-        let size = f32::from_bits(key.font_size_bits);
-        let metrics = face.metrics(&coordinates);
-        let mut scaler = self
-            .synthetic_scaler
-            .builder(face)
-            .size(size)
-            .normalized_coords(coordinates.iter().copied())
-            .hint(true)
-            .build();
-        let mut render = swash::scale::Render::new(&[
-            swash::scale::Source::ColorOutline(0),
-            swash::scale::Source::ColorBitmap(swash::scale::StrikeWith::BestFit),
-            swash::scale::Source::Outline,
-        ]);
-        render
-            .format(swash::zeno::Format::Alpha)
-            .offset(swash::zeno::Vector::new(
-                key.x_bin.as_float(),
-                key.y_bin.as_float(),
-            ));
-        if style.italic {
-            render.transform(Some(swash::zeno::Transform::skew(
-                swash::zeno::Angle::from_degrees(12.),
-                swash::zeno::Angle::from_degrees(0.),
-            )));
-        }
-        if style.bold {
-            // Ghostty FreeType uses ceil(face_height_26_6 / 32) in 26.6 units.
-            let height = (metrics.ascent + metrics.descent + metrics.leading) * size
-                / f32::from(metrics.units_per_em);
-            let strength = (height.round().max(1.) * 2.).ceil() / 64.;
-            render.embolden(strength);
-        }
-        let image = render.render(&mut scaler, key.glyph_id);
-        if self.synthetic_images.len() == 8192 {
-            self.synthetic_images.clear();
+        let cache_key = (key, style, identity);
+        if !self.synthetic_images.contains_key(&cache_key) {
+            let font = loaded.font.clone();
+            let coordinates = loaded.coordinates.clone();
+            let face = font.as_swash();
+            let size = f32::from_bits(key.font_size_bits);
+            let metrics = face.metrics(&coordinates);
+            let mut scaler = self
+                .synthetic_scaler
+                .builder(face)
+                .size(size)
+                .normalized_coords(coordinates.iter().copied())
+                .hint(true)
+                .build();
+            let mut render = swash::scale::Render::new(&[
+                swash::scale::Source::ColorOutline(0),
+                swash::scale::Source::ColorBitmap(swash::scale::StrikeWith::BestFit),
+                swash::scale::Source::Outline,
+            ]);
+            render
+                .format(swash::zeno::Format::Alpha)
+                .offset(swash::zeno::Vector::new(
+                    key.x_bin.as_float(),
+                    key.y_bin.as_float(),
+                ));
+            if style.italic {
+                render.transform(Some(swash::zeno::Transform::skew(
+                    swash::zeno::Angle::from_degrees(12.),
+                    swash::zeno::Angle::from_degrees(0.),
+                )));
+            }
+            if style.bold {
+                // Ghostty FreeType uses ceil(face_height_26_6 / 32) in 26.6 units.
+                let height = (metrics.ascent + metrics.descent + metrics.leading) * size
+                    / f32::from(metrics.units_per_em);
+                let strength = (height.round().max(1.) * 2.).ceil() / 64.;
+                render.embolden(strength);
+            }
+            let image = render.render(&mut scaler, key.glyph_id);
+            if self.synthetic_images.len() == 8192 {
+                self.synthetic_images.clear();
+            }
+            self.synthetic_images.insert(cache_key, image);
         }
         self.synthetic_images
-            .insert((key, style, identity), image.clone());
-        image
+            .get(&cache_key)
+            .and_then(Option::as_ref)
     }
 
     fn raster_bounds(&mut self, params: &RenderGlyphParams) -> Result<Bounds<DevicePixels>> {
         let (key, style) = self.raster_key(params);
-        let image = self
+        let placement = self
             .glyph_image(key, style, params.font_id)
+            .map(|image| image.placement)
             .with_context(|| format!("no image for {params:?}"))?;
         Ok(Bounds {
-            origin: point(image.placement.left.into(), (-image.placement.top).into()),
-            size: size(image.placement.width.into(), image.placement.height.into()),
+            origin: point(placement.left.into(), (-placement.top).into()),
+            size: size(placement.width.into(), placement.height.into()),
         })
     }
 
@@ -1066,15 +1068,16 @@ impl OhosTextSystemState {
             anyhow::bail!("glyph bounds are empty");
         }
         let (key, style) = self.raster_key(params);
-        let mut image = self
+        let mut data = self
             .glyph_image(key, style, params.font_id)
+            .map(|image| image.data.clone())
             .with_context(|| format!("no image for {params:?}"))?;
         if params.is_emoji {
-            for pixel in image.data.as_chunks_mut::<4>().0 {
+            for pixel in data.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
             }
         }
-        Ok((glyph_bounds.size, image.data))
+        Ok((glyph_bounds.size, data))
     }
 
     fn font_id_for_cosmic_id(
