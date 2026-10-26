@@ -10,9 +10,9 @@ use std::{
 
 use gpui_ohos::{
     App, AppContext, Application, ApplicationHandle, Bounds, ClipboardItem, Context, IntoElement,
-    Menu, MenuItem, PathPromptOptions, Render, SystemNotification, SystemNotificationAction,
-    WeakEntity, Window, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowId,
-    WindowOptions, actions, div, point, prelude::*, px, rgb, rgba, size,
+    KeyBinding, Menu, MenuItem, PathPromptOptions, Render, SystemNotification,
+    SystemNotificationAction, WeakEntity, Window, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowId, WindowOptions, actions, div, point, prelude::*, px, rgb, rgba, size,
 };
 use log::LevelFilter;
 use ohos_hilog_binding::log::Config;
@@ -770,6 +770,14 @@ fn openharmony_app(app: OpenHarmonyApp) {
             log::info!("GPUI menu action count: {count}");
             cx.refresh_windows();
         });
+        cx.bind_keys([
+            KeyBinding::new("ctrl-shift-m", CountMenuAction, None),
+            KeyBinding::new(
+                "ctrl-shift-m",
+                ime_demo::CountFocusedMenuChord,
+                Some("ImeDemo"),
+            ),
+        ]);
         cx.set_menus(vec![Menu::new("Demo").items(vec![
             MenuItem::action("Count menu action", CountMenuAction),
             MenuItem::action("Unavailable action", UnavailableMenuAction),

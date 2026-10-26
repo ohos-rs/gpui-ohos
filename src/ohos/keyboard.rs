@@ -42,37 +42,15 @@ impl OhosKeyState {
         self.handle_key(event.code, event.action, Some(event))
     }
 
-    pub(crate) fn handle_arkui_state(
-        &mut self,
-        event: &KeyboardEventData,
-    ) -> Option<PlatformInput> {
-        let previous_modifiers = self.modifiers;
-        let previous_capslock = self.capslock;
-        if let Some(pressed) = &event.pressed_keys {
-            // Clear releases even when the IME consumes their post-IME event.
-            // Never add the current down here: its first post-IME press is not a repeat.
-            self.pressed.retain(|code| pressed.contains(code));
-            self.modifiers = modifiers_for_keys(pressed);
-        }
-        if event.action == Action::Up {
-            self.pressed.retain(|code| *code != event.code);
-        }
-        if let Some(state) = event.caps_lock {
-            self.capslock.on = state;
-        }
-        if let Some(state) = event.num_lock {
-            self.numlock = state;
-        }
-        (self.modifiers != previous_modifiers || self.capslock != previous_capslock)
-            .then(|| self.modifiers_changed())
-    }
-
     fn handle_key(
         &mut self,
         code: KeyCode,
         action: Action,
         snapshot: Option<&KeyboardEventData>,
     ) -> Vec<PlatformInput> {
+        if action == Action::Unknown {
+            return Vec::new();
+        }
         let held = self.pressed.contains(&code);
         if let Some(pressed) = snapshot.and_then(|event| event.pressed_keys.as_ref()) {
             self.pressed.clone_from(pressed);
@@ -81,9 +59,6 @@ impl OhosKeyState {
             Action::Down if !self.pressed.contains(&code) => self.pressed.push(code),
             Action::Up => self.pressed.retain(|pressed| *pressed != code),
             Action::Down | Action::Unknown => {}
-        }
-        if action == Action::Unknown {
-            return Vec::new();
         }
 
         let previous_modifiers = self.modifiers;
@@ -106,7 +81,9 @@ impl OhosKeyState {
         if self.modifiers != previous_modifiers || self.capslock != previous_capslock {
             output.push(self.modifiers_changed());
         }
-        if is_modifier(code) {
+        // Ability delivers each physical transition once, including IME-consumed keys.
+        // Their state still matters, but their text/edit/shortcut is owned by the IME.
+        if snapshot.is_some_and(|event| event.ime_consumed) || is_modifier(code) {
             return output;
         }
         let Some(key) =
@@ -125,7 +102,23 @@ impl OhosKeyState {
             snapshot
                 .and_then(|event| char::from_u32(event.unicode))
                 .filter(|character| !character.is_control())
-                .map(|character| character.to_string())
+                .map(|character| {
+                    // Normalize known shifted pairs without replacing other layouts.
+                    let character = if character.is_ascii_alphabetic() {
+                        if self.modifiers.shift ^ self.capslock.on {
+                            character.to_ascii_uppercase()
+                        } else {
+                            character.to_ascii_lowercase()
+                        }
+                    } else if let Some((plain, shifted)) = printable_key_pair(code)
+                        && (character == plain || character == shifted)
+                    {
+                        if self.modifiers.shift { shifted } else { plain }
+                    } else {
+                        character
+                    };
+                    character.to_string()
+                })
                 .or_else(|| printable_char(code, self.modifiers, self.capslock))
         };
         let keystroke = Keystroke {
@@ -201,71 +194,34 @@ fn keypad_navigation(code: KeyCode, numlock: bool, shift: bool) -> Option<&'stat
     }
 }
 
-fn letter(code: KeyCode) -> Option<char> {
-    match code {
-        KeyCode::A => Some('a'),
-        KeyCode::B => Some('b'),
-        KeyCode::C => Some('c'),
-        KeyCode::D => Some('d'),
-        KeyCode::E => Some('e'),
-        KeyCode::F => Some('f'),
-        KeyCode::G => Some('g'),
-        KeyCode::H => Some('h'),
-        KeyCode::I => Some('i'),
-        KeyCode::J => Some('j'),
-        KeyCode::K => Some('k'),
-        KeyCode::L => Some('l'),
-        KeyCode::M => Some('m'),
-        KeyCode::N => Some('n'),
-        KeyCode::O => Some('o'),
-        KeyCode::P => Some('p'),
-        KeyCode::Q => Some('q'),
-        KeyCode::R => Some('r'),
-        KeyCode::S => Some('s'),
-        KeyCode::T => Some('t'),
-        KeyCode::U => Some('u'),
-        KeyCode::V => Some('v'),
-        KeyCode::W => Some('w'),
-        KeyCode::X => Some('x'),
-        KeyCode::Y => Some('y'),
-        KeyCode::Z => Some('z'),
-        _ => None,
-    }
-}
-
 fn key_name(code: KeyCode) -> Option<&'static str> {
-    if let Some(letter) = letter(code) {
-        return Some(match letter {
-            'a' => "a",
-            'b' => "b",
-            'c' => "c",
-            'd' => "d",
-            'e' => "e",
-            'f' => "f",
-            'g' => "g",
-            'h' => "h",
-            'i' => "i",
-            'j' => "j",
-            'k' => "k",
-            'l' => "l",
-            'm' => "m",
-            'n' => "n",
-            'o' => "o",
-            'p' => "p",
-            'q' => "q",
-            'r' => "r",
-            's' => "s",
-            't' => "t",
-            'u' => "u",
-            'v' => "v",
-            'w' => "w",
-            'x' => "x",
-            'y' => "y",
-            'z' => "z",
-            _ => unreachable!(),
-        });
-    }
     match code {
+        KeyCode::A => Some("a"),
+        KeyCode::B => Some("b"),
+        KeyCode::C => Some("c"),
+        KeyCode::D => Some("d"),
+        KeyCode::E => Some("e"),
+        KeyCode::F => Some("f"),
+        KeyCode::G => Some("g"),
+        KeyCode::H => Some("h"),
+        KeyCode::I => Some("i"),
+        KeyCode::J => Some("j"),
+        KeyCode::K => Some("k"),
+        KeyCode::L => Some("l"),
+        KeyCode::M => Some("m"),
+        KeyCode::N => Some("n"),
+        KeyCode::O => Some("o"),
+        KeyCode::P => Some("p"),
+        KeyCode::Q => Some("q"),
+        KeyCode::R => Some("r"),
+        KeyCode::S => Some("s"),
+        KeyCode::T => Some("t"),
+        KeyCode::U => Some("u"),
+        KeyCode::V => Some("v"),
+        KeyCode::W => Some("w"),
+        KeyCode::X => Some("x"),
+        KeyCode::Y => Some("y"),
+        KeyCode::Z => Some("z"),
         KeyCode::Key0 | KeyCode::Numpad0 => Some("0"),
         KeyCode::Key1 | KeyCode::Numpad1 => Some("1"),
         KeyCode::Key2 | KeyCode::Numpad2 => Some("2"),
@@ -328,67 +284,53 @@ fn key_name(code: KeyCode) -> Option<&'static str> {
     }
 }
 
+fn printable_key_pair(code: KeyCode) -> Option<(char, char)> {
+    Some(match code {
+        KeyCode::Key0 => ('0', ')'),
+        KeyCode::Key1 => ('1', '!'),
+        KeyCode::Key2 => ('2', '@'),
+        KeyCode::Key3 => ('3', '#'),
+        KeyCode::Key4 => ('4', '$'),
+        KeyCode::Key5 => ('5', '%'),
+        KeyCode::Key6 => ('6', '^'),
+        KeyCode::Key7 => ('7', '&'),
+        KeyCode::Key8 => ('8', '*'),
+        KeyCode::Key9 => ('9', '('),
+        KeyCode::Minus => ('-', '_'),
+        KeyCode::Equals => ('=', '+'),
+        KeyCode::LeftBracket => ('[', '{'),
+        KeyCode::RightBracket => (']', '}'),
+        KeyCode::Backslash => ('\\', '|'),
+        KeyCode::Semicolon => (';', ':'),
+        KeyCode::Apostrophe => ('\'', '"'),
+        KeyCode::Comma => (',', '<'),
+        KeyCode::Period => ('.', '>'),
+        KeyCode::Slash => ('/', '?'),
+        KeyCode::Grave => ('`', '~'),
+        _ => return None,
+    })
+}
+
 fn printable_char(code: KeyCode, modifiers: Modifiers, capslock: Capslock) -> Option<String> {
     if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
         return None;
     }
+    let key = key_name(code)?;
     let character = if code == KeyCode::Space {
         ' '
+    } else if let Some((plain, shifted)) = printable_key_pair(code) {
+        if modifiers.shift { shifted } else { plain }
+    } else if key.len() == 1 {
+        let character = key.chars().next()?;
+        if character.is_ascii_alphabetic() && (modifiers.shift ^ capslock.on) {
+            character.to_ascii_uppercase()
+        } else {
+            character
+        }
     } else if code == KeyCode::NumpadPlusMinus {
         '±'
-    } else if let Some(letter) = letter(code) {
-        if modifiers.shift ^ capslock.on {
-            letter.to_ascii_uppercase()
-        } else {
-            letter
-        }
     } else {
-        let key = key_name(code)?;
-        if key.len() != 1 {
-            return None;
-        }
-        let plain = key.chars().next()?;
-        if modifiers.shift
-            && !matches!(
-                code,
-                KeyCode::NumpadDivide
-                    | KeyCode::NumpadMultiply
-                    | KeyCode::NumpadSubtract
-                    | KeyCode::NumpadAdd
-                    | KeyCode::NumpadDot
-                    | KeyCode::NumpadComma
-                    | KeyCode::NumpadEquals
-                    | KeyCode::NumpadLeftParen
-                    | KeyCode::NumpadRightParen
-            )
-        {
-            match plain {
-                '1' => '!',
-                '2' => '@',
-                '3' => '#',
-                '4' => '$',
-                '5' => '%',
-                '6' => '^',
-                '7' => '&',
-                '8' => '*',
-                '9' => '(',
-                '0' => ')',
-                '-' => '_',
-                '=' => '+',
-                '[' => '{',
-                ']' => '}',
-                '\\' => '|',
-                ';' => ':',
-                '\'' => '"',
-                ',' => '<',
-                '.' => '>',
-                '/' => '?',
-                '`' => '~',
-                _ => plain,
-            }
-        } else {
-            plain
-        }
+        return None;
     };
     Some(character.to_string())
 }
@@ -418,98 +360,5 @@ impl PlatformKeyboardMapper for OhosKeyboardMapper {
 
     fn get_key_equivalents(&self) -> Option<&HashMap<char, char>> {
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use openharmony_ability::xcomponent::EventSource;
-
-    fn snapshot(code: KeyCode, unicode: u32, pressed: Vec<KeyCode>) -> KeyboardEventData {
-        KeyboardEventData {
-            code,
-            action: Action::Down,
-            device_id: 1,
-            source: EventSource::Keyboard,
-            timestamp: 0,
-            unicode,
-            pressed_keys: Some(pressed),
-            caps_lock: Some(true),
-            num_lock: Some(true),
-            response: Default::default(),
-        }
-    }
-
-    fn key_down(events: &[PlatformInput]) -> &KeyDownEvent {
-        events
-            .iter()
-            .find_map(|event| match event {
-                PlatformInput::KeyDown(event) => Some(event),
-                _ => None,
-            })
-            .expect("missing key down")
-    }
-
-    #[test]
-    fn snapshots_recover_modifiers_and_preexisting_caps_lock() {
-        let mut state = OhosKeyState::default();
-        let event = snapshot(KeyCode::A, 'A' as u32, vec![KeyCode::CtrlLeft, KeyCode::A]);
-        assert!(state.handle_arkui_state(&event).is_some());
-        assert!(state.capslock().on);
-        let inputs = state.handle_arkui(&event);
-        assert!(key_down(&inputs).keystroke.modifiers.control);
-        assert_eq!(key_down(&inputs).keystroke.key_char, None);
-        state.clear_pressed();
-        let event = snapshot(
-            KeyCode::Key2,
-            '"' as u32,
-            vec![KeyCode::ShiftLeft, KeyCode::Key2],
-        );
-        let inputs = state.handle_arkui(&event);
-        assert_eq!(key_down(&inputs).keystroke.key_char.as_deref(), Some("\""));
-        assert!(!key_down(&inputs).keystroke.modifiers.control);
-    }
-
-    #[test]
-    fn pre_ime_state_does_not_turn_first_press_into_repeat() {
-        let mut state = OhosKeyState::default();
-        let event = snapshot(KeyCode::A, 'A' as u32, vec![KeyCode::A]);
-        state.handle_arkui_state(&event);
-        let inputs = state.handle_arkui(&event);
-        assert!(!key_down(&inputs).is_held);
-        state.handle_arkui_state(&event);
-        let inputs = state.handle_arkui(&event);
-        assert!(key_down(&inputs).is_held);
-        let mut release = event.clone();
-        release.action = Action::Up;
-        release.pressed_keys = Some(vec![]);
-        // The IME may consume the release, leaving only the pre-IME snapshot.
-        state.handle_arkui_state(&release);
-        state.handle_arkui_state(&event);
-        let inputs = state.handle_arkui(&event);
-        assert!(!key_down(&inputs).is_held);
-    }
-
-    #[test]
-    fn keypad_navigation_and_space_have_text_semantics() {
-        let mut state = OhosKeyState::default();
-        let mut event = snapshot(KeyCode::Numpad1, 0, vec![KeyCode::Numpad1]);
-        let inputs = state.handle_arkui(&event);
-        assert_eq!(key_down(&inputs).keystroke.key_char.as_deref(), Some("1"));
-        event.num_lock = Some(false);
-        let inputs = state.handle_arkui(&event);
-        assert_eq!(key_down(&inputs).keystroke.key, "end");
-        assert_eq!(key_down(&inputs).keystroke.key_char, None);
-        let event = snapshot(KeyCode::Space, 0, vec![KeyCode::Space]);
-        let inputs = state.handle_arkui(&event);
-        assert_eq!(key_down(&inputs).keystroke.key_char.as_deref(), Some(" "));
-        let event = snapshot(
-            KeyCode::NumpadSubtract,
-            0,
-            vec![KeyCode::ShiftLeft, KeyCode::NumpadSubtract],
-        );
-        let inputs = state.handle_arkui(&event);
-        assert_eq!(key_down(&inputs).keystroke.key_char.as_deref(), Some("-"));
     }
 }

@@ -1,6 +1,6 @@
 [workspace]
 members = []
-exclude = ["example", "tests/touch"]
+exclude = ["example", "example/ohos/vendor/openharmony-ability", "example/ohos/vendor/openharmony-ability/crates/*"]
 resolver = "2"
 
 [workspace.package]
@@ -17,7 +17,7 @@ cosmic-text = "0.17.0"
 etagere = "0.2"
 font-kit = { package = "zed-font-kit", version = "0.14.1-zed", git = "https://github.com/zed-industries/font-kit", rev = "110523127440aefb11ce0cf280ae7c5071337ec5", features = ["source-fontconfig-dlopen"] }
 futures = "0.3.34"
-gpui = { git = "https://github.com/ohos-rs/zed", rev = "f45c7c22d0", default-features = false }
+gpui = { git = "https://github.com/ohos-rs/zed", rev = "00542402c992e7a041f110c7d2386c60a40b7038", default-features = false }
 itertools = "0.14.0"
 image = { version = "0.25.1", default-features = false }
 log = "0.4"
@@ -29,16 +29,16 @@ ohos-vsync-binding = { version = "0.3.1", default-features = false, features = [
 napi-ohos = "=1.2.0"
 napi-derive-ohos = "=1.2.0"
 # GPUI uses owned ArkUI key events, mouse cancellation, and native file drag/drop on every backend.
-openharmony-ability = { version = "=1.0.0-beta.3", features = ["keyboard", "mouse", "drag"] }
-openharmony-ability-plugin-menu = "=1.0.0-beta.3"
-openharmony-ability-plugin-notification = "=1.0.0-beta.3"
-openharmony-ability-plugin-system-state = "=1.0.0-beta.3"
-openharmony-ability-plugin-app-control = "=1.0.0-beta.3"
-openharmony-ability-plugin-clipboard = "=1.0.0-beta.3"
-openharmony-ability-plugin-files = "=1.0.0-beta.3"
-openharmony-ability-plugin-process = "=1.0.0-beta.3"
-openharmony-ability-plugin-url = "=1.0.0-beta.3"
-openharmony-ability-plugin-window = "=1.0.0-beta.3"
+# Coherent D3/D4 source contract; upstream Ability/binding releases remain blockers.
+openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3", features = ["keyboard", "mouse", "drag"] }
+openharmony-ability-plugin-menu = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-notification = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-system-state = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-app-control = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-clipboard = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3", features = ["api-18"] }
+openharmony-ability-plugin-files = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-url = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
+openharmony-ability-plugin-window = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
 parking_lot = "0.12.1"
 profiling = "1"
 serde = { version = "1", features = ["derive"] }
@@ -50,6 +50,7 @@ sha2 = "0.10"
 smol = "2.0"
 uuid = { version = "1.1.2", features = ["v4", "v5", "v7", "serde"] }
 url = "2"
+unicode-script = "0.5"
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "8b419de0906f37af69d728f1735132e427a3436f", default-features = false, features = ["parking_lot", "std", "wgsl"] }
 
 [package]
@@ -66,6 +67,8 @@ default = ["gles"]
 gles = ["wgpu/gles"]
 vulkan = ["wgpu/vulkan"]
 native-vsync = ["dep:ohos-vsync-binding"]
+api-19 = ["openharmony-ability/api-19"]
+api-26 = ["api-19", "openharmony-ability/api-26"]
 
 [lib]
 name = "gpui_ohos"
@@ -98,10 +101,10 @@ openharmony-ability-plugin-files.workspace = true
 crossbeam-channel.workspace = true
 serde_json.workspace = true
 serde.workspace = true
-openharmony-ability-plugin-process.workspace = true
 napi-ohos.workspace = true
 napi-derive-ohos.workspace = true
 url.workspace = true
+unicode-script.workspace = true
 openharmony-ability-plugin-url.workspace = true
 openharmony-ability-plugin-window.workspace = true
 parking_lot.workspace = true

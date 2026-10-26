@@ -35,7 +35,7 @@ impl Drop for FrameCallbackScope {
 
 pub(crate) struct WindowFrames {
     app: Rc<RefCell<Option<OpenHarmonyApp>>>,
-    window_id: i64,
+    window_id: Cell<i64>,
     window: RefCell<Weak<RefCell<OhosWindow>>>,
     demand: RefCell<FrameDemand>,
     surface_available: Cell<bool>,
@@ -61,7 +61,7 @@ impl WindowFrames {
     ) -> Rc<Self> {
         let frames = Rc::new(Self {
             app,
-            window_id,
+            window_id: Cell::new(window_id),
             window: RefCell::new(Weak::new()),
             demand: RefCell::new(FrameDemand::default()),
             surface_available: Cell::new(false),
@@ -84,6 +84,20 @@ impl WindowFrames {
 
     pub(crate) fn set_window(&self, window: Weak<RefCell<OhosWindow>>) {
         *self.window.borrow_mut() = window;
+    }
+
+    pub(crate) fn rebind_window(self: &Rc<Self>, window_id: i64) {
+        // The frame waker is cached by GPUI and must follow the logical window.
+        self.window_id.set(window_id);
+        #[cfg(feature = "native-vsync")]
+        {
+            self.native_cleanup_pending.set(true);
+            self.active.set(false);
+            super::native_frames::register(self);
+        }
+        self.demand.borrow_mut().surface_destroyed();
+        self.surface_available.set(false);
+        self.sync_frame_delivery();
     }
 
     pub(crate) fn request(self: &Rc<Self>) {
@@ -134,7 +148,7 @@ impl WindowFrames {
                 Ok(())
             }
             #[cfg(not(feature = "native-vsync"))]
-            app.set_frame_input_delivery_for(self.window_id, FrameInputDelivery::OnDemand)
+            app.set_frame_input_delivery_for(self.window_id.get(), FrameInputDelivery::OnDemand)
         };
         self.demand.borrow_mut().complete(change, result.is_ok());
         if let Err(error) = result {
@@ -147,7 +161,7 @@ impl WindowFrames {
                 let operation = if register { "register" } else { "unregister" };
                 log::warn!(
                     "Cannot {operation} OHOS frame callback for window {}: {error}",
-                    self.window_id
+                    self.window_id.get()
                 );
             }
         }
@@ -155,18 +169,18 @@ impl WindowFrames {
 
     #[cfg(not(feature = "native-vsync"))]
     fn register_delivery(&self, app: &OpenHarmonyApp) -> napi_ohos::Result<()> {
-        app.set_frame_input_delivery_for(self.window_id, FrameInputDelivery::Continuous)
+        app.set_frame_input_delivery_for(self.window_id.get(), FrameInputDelivery::Continuous)
     }
 
     #[cfg(feature = "native-vsync")]
     fn register_delivery(&self, app: &OpenHarmonyApp) -> napi_ohos::Result<()> {
-        app.set_frame_input_delivery_for(self.window_id, FrameInputDelivery::OnDemand)?;
+        app.set_frame_input_delivery_for(self.window_id.get(), FrameInputDelivery::OnDemand)?;
         let hz = app.refresh_rate();
-        let native = NativeFrames::new(self.window_id, hz, app.main_thread()?)?;
+        let native = NativeFrames::new(self.window_id.get(), hz, app.main_thread()?)?;
         *self.native.borrow_mut() = Some(native);
         log::info!(
             "native-frame-source window={} target_hz={hz}",
-            self.window_id
+            self.window_id.get()
         );
         Ok(())
     }
@@ -198,7 +212,7 @@ impl WindowFrames {
 
     #[cfg(feature = "native-vsync")]
     pub(crate) fn window_id(&self) -> i64 {
-        self.window_id
+        self.window_id.get()
     }
 
     #[cfg(feature = "native-vsync")]
@@ -218,7 +232,10 @@ impl WindowFrames {
         if self.active.get() {
             let result = self.native.borrow_mut().as_mut().map(NativeFrames::request);
             if let Some(Err(error)) = result {
-                log::warn!("NativeVSync stopped for window {}: {error}", self.window_id);
+                log::warn!(
+                    "NativeVSync stopped for window {}: {error}",
+                    self.window_id.get()
+                );
                 self.demand
                     .borrow_mut()
                     .complete(DeliveryChange::Register, false);
@@ -227,7 +244,7 @@ impl WindowFrames {
             }
         }
         if let Some(window) = self.window.borrow().upgrade() {
-            window.borrow().draw_requested_frame(Instant::now());
+            window.borrow().draw_native_frame(Instant::now());
         }
     }
 }

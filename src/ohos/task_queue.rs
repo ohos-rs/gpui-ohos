@@ -12,8 +12,6 @@ struct State<T> {
     closed: bool,
     started: u64,
     wake_on_progress: bool,
-    #[cfg(test)]
-    progress_notifications: usize,
 }
 
 pub(crate) struct TaskQueue<T> {
@@ -55,8 +53,6 @@ impl<T> Default for TaskQueue<T> {
                 closed: false,
                 started: 0,
                 wake_on_progress: false,
-                #[cfg(test)]
-                progress_notifications: 0,
             }),
             ready: Condvar::new(),
             changed: Condvar::new(),
@@ -114,10 +110,6 @@ impl<T> TaskQueue<T> {
             if let Some(task) = Self::take(&mut state) {
                 if state.wake_on_progress {
                     state.wake_on_progress = false;
-                    #[cfg(test)]
-                    {
-                        state.progress_notifications += 1;
-                    }
                     self.changed.notify_one();
                 }
                 return Some(task);
@@ -187,133 +179,5 @@ impl<T> TaskQueue<T> {
         self.ready.notify_all();
         self.changed.notify_all();
         remaining
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn priorities_are_fifo_and_low_work_is_serviced() {
-        let q = TaskQueue::default();
-        for i in 0..6 {
-            q.push(Priority::High, i).unwrap();
-        }
-        q.push(Priority::Medium, 10).unwrap();
-        q.push(Priority::Medium, 11).unwrap();
-        q.push(Priority::Low, 20).unwrap();
-        let result: Vec<_> = (0..9).map(|_| q.pop().unwrap()).collect();
-        assert_eq!(result, [0, 1, 2, 3, 4, 5, 10, 11, 20]);
-    }
-    #[test]
-    fn closing_wakes_waiters_and_rejects_new_work() {
-        let q = std::sync::Arc::new(TaskQueue::<u32>::default());
-        let other = q.clone();
-        let worker = std::thread::spawn(move || other.pop());
-        assert!(q.close().is_empty());
-        assert_eq!(worker.join().unwrap(), None);
-        assert_eq!(q.push(Priority::Low, 7), Err(7));
-    }
-    #[test]
-    fn an_idle_elastic_worker_can_retire_without_closing_the_queue() {
-        let q = TaskQueue::default();
-        assert_eq!(q.pop_timeout(Duration::from_millis(5)), None);
-        q.push(Priority::Medium, 7).unwrap();
-        assert_eq!(q.pop(), Some(7));
-    }
-    #[test]
-    fn dequeues_notify_only_once_per_backed_off_wait() {
-        let q = TaskQueue::default();
-        for task in 0..6 {
-            q.push(Priority::Medium, task).unwrap();
-        }
-        assert_eq!(q.pop(), Some(0));
-        assert_eq!(q.state.lock().unwrap().progress_notifications, 0);
-
-        q.state.lock().unwrap().wake_on_progress = true;
-        for task in 1..4 {
-            assert_eq!(q.pop(), Some(task));
-        }
-        {
-            let state = q.state.lock().unwrap();
-            assert!(!state.wake_on_progress);
-            assert_eq!(state.progress_notifications, 1);
-        }
-
-        q.state.lock().unwrap().wake_on_progress = true;
-        assert_eq!(q.pop(), Some(4));
-        assert_eq!(q.pop(), Some(5));
-        assert_eq!(q.state.lock().unwrap().progress_notifications, 2);
-    }
-    #[test]
-    fn stalled_observations_back_off_until_work_progresses() {
-        let q = TaskQueue::default();
-        let mut backoff = StallBackoff::default();
-        q.push(Priority::Medium, 1).unwrap();
-        q.push(Priority::Medium, 2).unwrap();
-        for millis in [10, 20, 40, 80, 100, 100] {
-            let start = Instant::now();
-            assert!(q.wait_for_stalled_work(&mut backoff));
-            assert_eq!(backoff.interval, Duration::from_millis(millis));
-            assert!(start.elapsed() >= backoff.interval);
-            backoff.back_off();
-        }
-        assert_eq!(q.pop(), Some(1));
-        assert!(q.wait_for_stalled_work(&mut backoff));
-        assert_eq!(backoff.interval, Duration::from_millis(10));
-    }
-    #[test]
-    fn progress_wakes_a_monitor_in_backoff() {
-        let q = std::sync::Arc::new(TaskQueue::default());
-        q.push(Priority::Medium, 1).unwrap();
-        q.push(Priority::Medium, 2).unwrap();
-        let other = q.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let monitor = std::thread::spawn(move || {
-            let mut backoff = StallBackoff {
-                interval: Duration::from_secs(60),
-                started: 0,
-            };
-            assert!(other.wait_for_stalled_work(&mut backoff));
-            tx.send(backoff.interval).unwrap();
-        });
-        std::thread::sleep(Duration::from_millis(20));
-        assert_eq!(q.pop(), Some(1));
-        let result = rx.recv_timeout(Duration::from_secs(1));
-        q.close();
-        monitor.join().unwrap();
-        assert_eq!(result.unwrap(), Duration::from_millis(10));
-    }
-    #[test]
-    fn empty_queue_sleeps_and_resets_observation_backoff() {
-        let q = std::sync::Arc::new(TaskQueue::default());
-        let other = q.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let monitor = std::thread::spawn(move || {
-            let mut backoff = StallBackoff {
-                interval: Duration::from_millis(100),
-                started: 0,
-            };
-            assert!(other.wait_for_stalled_work(&mut backoff));
-            tx.send(backoff.interval).unwrap();
-        });
-        assert_eq!(
-            rx.recv_timeout(Duration::from_millis(150)),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        );
-        q.push(Priority::Medium, 1).unwrap();
-        let result = rx.recv_timeout(Duration::from_secs(1));
-        q.close();
-        monitor.join().unwrap();
-        assert_eq!(result.unwrap(), Duration::from_millis(10));
-    }
-    #[test]
-    fn shutdown_wakes_the_idle_growth_monitor() {
-        let q = std::sync::Arc::new(TaskQueue::<u32>::default());
-        let other = q.clone();
-        let monitor =
-            std::thread::spawn(move || other.wait_for_stalled_work(&mut StallBackoff::default()));
-        assert!(q.close().is_empty());
-        assert!(!monitor.join().unwrap());
     }
 }

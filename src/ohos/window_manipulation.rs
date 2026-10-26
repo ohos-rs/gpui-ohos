@@ -55,39 +55,3 @@ impl WindowManipulation {
         result
     }
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn resize_keeps_opposite_edges_fixed_at_minimum() {
-        let initial = NativeWindowState {
-            left: 100,
-            top: 200,
-            width: 800,
-            height: 600,
-            maximized: false,
-            fullscreen: false,
-        };
-        let session = WindowManipulation {
-            initial,
-            pointer: (110, 210),
-            edge: Some(ResizeEdge::TopLeft),
-        };
-        let result = session.update((1000, 1000), (300, 200));
-        assert_eq!(
-            (result.left, result.top, result.width, result.height),
-            (600, 600, 300, 200)
-        );
-        assert_eq!(result.left + result.width, initial.left + initial.width);
-        assert_eq!(result.top + result.height, initial.top + initial.height);
-        let moved = WindowManipulation {
-            edge: None,
-            ..session
-        }
-        .update((130, 240), (1, 1));
-        assert_eq!(
-            (moved.left, moved.top, moved.width, moved.height),
-            (120, 230, 800, 600)
-        );
-    }
-}

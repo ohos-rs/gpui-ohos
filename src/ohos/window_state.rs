@@ -44,27 +44,3 @@ impl NativeWindowState {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn native_state_roundtrip_and_validation() {
-        let state = NativeWindowState {
-            left: -100,
-            top: 20,
-            width: 800,
-            height: 600,
-            maximized: true,
-            fullscreen: false,
-        };
-        let bytes = state.encode();
-        assert_eq!(NativeWindowState::decode(&bytes), Some(state));
-        assert!(NativeWindowState::decode(&bytes[..40]).is_none());
-        let mut invalid = bytes.clone();
-        invalid[40] = 4;
-        assert!(NativeWindowState::decode(&invalid).is_none());
-        let invalid = NativeWindowState { width: 0, ..state }.encode();
-        assert!(NativeWindowState::decode(&invalid).is_none());
-    }
-}

@@ -1,6 +1,7 @@
 use std::{
     fmt::Debug,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 use uuid::Uuid;
 
@@ -132,6 +133,21 @@ impl PlatformDisplay for OhosDisplay {
                 ),
             )
         }
+    }
+
+    fn refresh_interval(&self) -> Option<Duration> {
+        let snapshot = match self.snapshot.lock() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                log::error!("Failed to read OHOS display refresh rate: {error}");
+                return None;
+            }
+        };
+        let hertz = match snapshot.as_ref() {
+            Some(snapshot) => snapshot.refresh_rate?,
+            None => f64::from(self.app.refresh_rate()),
+        };
+        crate::refresh_interval_from_hz(hertz)
     }
 
     fn visible_bounds(&self) -> Bounds<Pixels> {
