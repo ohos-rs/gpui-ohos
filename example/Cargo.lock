@@ -1400,7 +1400,6 @@ dependencies = [
  "etagere",
  "futures",
  "gpui",
- "harfrust",
  "image",
  "itertools",
  "log",

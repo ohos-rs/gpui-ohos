@@ -4,6 +4,12 @@
 
 ### Breaking
 
+- Audio playback is now behind the nondefault `audio` Cargo feature.
+  `AudioBridgePlugin`, `NativeAudioService`, `NativeAudioPlayer`,
+  `NativeAudioPlayerOptions` and `NativeAudioError` are unavailable without it.
+  Existing audio consumers must enable `audio` and continue registering the Rust
+  facade and matching ArkTS `AudioPlugin` explicitly. Owned-file acknowledgement
+  and command ordering are unchanged.
 - `NativePointerPosition` and `NativeScrollDelta` now require the nondefault
   `native-input` Cargo feature. Their modules and thread-local recording are
   excluded from default builds. Ordinary GPUI input is unchanged by this gate.
