@@ -969,18 +969,27 @@ impl OhosWindow {
             self.invalidate_pending_edit();
         }
         // XComponent's touch screen coordinates do not follow a moving window
-        // reliably. Resolve the local point against its current native origin.
-        let screen_position = match self.app.borrow().as_ref().and_then(|app| {
-            app.with_xcomponent_for(self.window_id, |component| {
-                component.raw().layout_position_in_screen()
-            })
-        }) {
-            Some(Ok(origin)) => (origin.x as f32 + x, origin.y as f32 + y),
-            Some(Err(error)) => {
-                warn!("Failed to locate OHOS touch surface: {error}");
-                screen_position
+        // reliably. Resolve the local point against its current native origin
+        // when starting a touch or driving an active window manipulation.
+        let needs_native_screen_origin = phase == TouchPhase::Started
+            || (phase == TouchPhase::Moved
+                && self.primary_touch.get() == Some(raw_id)
+                && self.manipulation.get().is_some());
+        let screen_position = if needs_native_screen_origin {
+            match self.app.borrow().as_ref().and_then(|app| {
+                app.with_xcomponent_for(self.window_id, |component| {
+                    component.raw().layout_position_in_screen()
+                })
+            }) {
+                Some(Ok(origin)) => (origin.x as f32 + x, origin.y as f32 + y),
+                Some(Err(error)) => {
+                    warn!("Failed to locate OHOS touch surface: {error}");
+                    screen_position
+                }
+                None => screen_position,
             }
-            None => screen_position,
+        } else {
+            screen_position
         };
         let position = self.point_from_device_pixels(x, y);
         if phase == TouchPhase::Started {
@@ -2961,12 +2970,19 @@ impl OhosWindow {
                     return;
                 }
                 if !matches!(ime_event, ImeEvent::ImeStatusEvent(_)) {
-                    // GPUI installs the focused input handler during paint. IME
-                    // edits bypass dispatch_key_event's dirty-frame refresh, so
-                    // complete it before borrowing the handler from the last frame.
-                    let was_deferred = self.defer_presentation.replace(true);
-                    self.draw_requested_frame(Instant::now());
-                    self.defer_presentation.set(was_deferred);
+                    let has_focused_handler = self
+                        .input_handler
+                        .borrow_mut()
+                        .as_mut()
+                        .is_some_and(PlatformInputHandler::query_accepts_focused_text_input);
+                    if !has_focused_handler {
+                        // GPUI installs the focused input handler during paint. IME
+                        // edits bypass dispatch_key_event's dirty-frame refresh, so
+                        // complete it before borrowing the handler when focus moved.
+                        let was_deferred = self.defer_presentation.replace(true);
+                        self.draw_requested_frame(Instant::now());
+                        self.defer_presentation.set(was_deferred);
+                    }
                 }
                 if let ImeEvent::ExtendActionEvent(action) = ime_event {
                     self.text_editing().dispatch_edit_action(*action);
