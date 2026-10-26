@@ -92,6 +92,7 @@ persistence does not revoke grants already stored by the OS or delete history.
 | `vulkan` | Vulkan rendering. |
 | `native-vsync` | Use NativeVSync frame callbacks instead of XComponent callbacks. |
 | `grid` | Experimental fixed-cell terminal shaping; disabled by default. |
+| `native-input` | Opt in to native pointer coordinates and event-scoped wheel metadata; disabled by default. |
 | `api-19` | Enable API-19 CapsLock / NumLock / ScrollLock state snapshots on keyboard events. |
 | `api-26` | Enable `api-19` and configure native hardware-key consumption before IME attachment (API 26+). |
 
@@ -216,6 +217,24 @@ until `PlatformWindow::on_input` is registered, and vetoed close requests restor
 window visibility and focus for task-center confirmation prompts. Enforced
 provider permission behavior still requires device verification.
 
+
+## Pointer and scroll input
+
+Wheel and touchpad deltas preserve the pre-pointer-scroll native sign.
+Discrete wheels use GPUI `Lines` with the system scroll-step coefficient;
+touchpads use scaled device pixels. Zero-delta axis updates are ignored except
+for gesture start and end. Fractional pointer coordinates and simultaneous
+mouse-button tracking are preserved.
+
+`NativePointerPosition` and `NativeScrollDelta` require the nondefault
+`native-input` Cargo feature. Without it, their modules, thread-local storage and
+recording calls are not compiled; ordinary GPUI input remains available.
+Unscaled wheel detents are available only when the system reports a positive
+`scroll_step`. For an unknown or nonpositive step, `NativeScrollDelta::get`
+returns `None`, while ordinary widgets still receive the original line delta.
+
+Hardware wheel/touchpad direction, including natural scrolling on and off, has
+not been verified. Host regressions are not hardware acceptance.
 
 ## Shared font services
 

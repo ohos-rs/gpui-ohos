@@ -44,6 +44,7 @@ use super::touch_scroll::{NativePanInput, TouchScroll};
 use super::wgpu_atlas::WgpuAtlas;
 use super::wgpu_context::WgpuContext;
 use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
+use super::{mouse_buttons::MouseButtons, scroll_packet::ScrollPacket};
 use crate::{
     A11yCallbacks, AnyWindowHandle, Bounds, Capslock, CursorStyle, DevicePixels, Edges,
     ForegroundExecutor, FrameRequestSource, GestureTuning, GpuSpecs, KeyDownEvent, Keystroke,
@@ -153,7 +154,7 @@ pub(crate) struct OhosWindow {
     ime_retry_pending: Cell<bool>,
     pointer_position: Cell<Option<Point<Pixels>>>,
     pointer_screen_position: Cell<Option<(i64, i64)>>,
-    pressed_mouse_button: Cell<Option<MouseButton>>,
+    pressed_mouse_button: Cell<MouseButtons>,
     mouse_click: RefCell<Option<MouseClickState>>,
     native_pointer_id: Cell<Option<i32>>,
     native_drag: Rc<RefCell<Option<openharmony_ability::NativeFileDrag>>>,
@@ -770,7 +771,7 @@ impl OhosWindow {
             ime_retry_pending: Cell::new(false),
             pointer_position: Cell::new(None),
             pointer_screen_position: Cell::new(None),
-            pressed_mouse_button: Cell::new(None),
+            pressed_mouse_button: Cell::new(MouseButtons::default()),
             mouse_click: RefCell::new(None),
             native_pointer_id: Cell::new(None),
             native_drag: Rc::new(RefCell::new(None)),
@@ -932,8 +933,20 @@ impl OhosWindow {
         point(px(x / scale), px(y / scale))
     }
 
+    fn pointer_position_from_device_pixels(&self, x: f32, y: f32) -> Point<Pixels> {
+        let logical = self.point_from_device_pixels(x, y);
+        #[cfg(feature = "native-input")]
+        super::pointer_position::NativePointerPosition::record(
+            self.handle.window_id(),
+            logical,
+            point(x, y),
+            *self.scale.borrow(),
+        );
+        logical
+    }
+
     fn pointer_position_from_arkui(&self, pointer: PointerInputData) -> Point<Pixels> {
-        self.point_from_device_pixels(pointer.x, pointer.y)
+        self.pointer_position_from_device_pixels(pointer.x, pointer.y)
     }
 
     fn allocate_touch_id(&self) -> TouchId {
@@ -1233,14 +1246,14 @@ impl OhosWindow {
     fn dispatch_scroll(
         &self,
         position: Point<Pixels>,
-        delta: Point<Pixels>,
+        delta: ScrollDelta,
         touch_phase: TouchPhase,
     ) -> crate::DispatchEventResult {
         Self::dispatch_input_with_callbacks(
             &self.callbacks,
             PlatformInput::ScrollWheel(ScrollWheelEvent {
                 position,
-                delta: ScrollDelta::Pixels(delta),
+                delta,
                 modifiers: self.key_state.borrow().modifiers(),
                 touch_phase,
             }),
@@ -1869,7 +1882,7 @@ impl OhosWindow {
             self.geometry_request.borrow_mut().take();
         }
         self.mouse_click.borrow_mut().take();
-        if let Some(button) = self.pressed_mouse_button.take() {
+        for button in self.pressed_mouse_button.take().iter() {
             self.dispatch_input(PlatformInput::MouseUp(MouseUpEvent {
                 button,
                 position: point(px(-1.), px(-1.)),
@@ -1905,7 +1918,7 @@ impl OhosWindow {
             || self.fullscreen.get()
             || (edge.is_some() && !self.is_resizable)
             || (edge.is_none() && !self.is_movable)
-            || (self.pressed_mouse_button.get() != Some(MouseButton::Left)
+            || (!self.pressed_mouse_button.get().contains(MouseButton::Left)
                 && self.active_touches.borrow().is_empty())
         {
             return;
@@ -2725,7 +2738,7 @@ impl OhosWindow {
                 }
                 if !next {
                     self.set_hovered(false);
-                    self.pressed_mouse_button.set(None);
+                    self.pressed_mouse_button.set(MouseButtons::default());
                     self.mouse_click.borrow_mut().take();
                     let modifiers_changed = self.key_state.borrow_mut().clear_pressed();
                     if let Some(event) = modifiers_changed {
@@ -2998,7 +3011,8 @@ impl OhosWindow {
                         self.manipulation.set(Some(session));
                     }
                 }
-                let position = self.point_from_device_pixels(mouse_event.x, mouse_event.y);
+                let position =
+                    self.pointer_position_from_device_pixels(mouse_event.x, mouse_event.y);
                 self.pointer_position.set(Some(position));
                 let event_button = Self::mouse_button(mouse_event.button);
                 match mouse_event.action {
@@ -3026,7 +3040,9 @@ impl OhosWindow {
                             count: click_count,
                         });
                         drop(click);
-                        self.pressed_mouse_button.set(Some(button));
+                        let mut held = self.pressed_mouse_button.get();
+                        held.press(button);
+                        self.pressed_mouse_button.set(held);
                         let result =
                             self.dispatch_input(PlatformInput::MouseDown(MouseDownEvent {
                                 button,
@@ -3050,11 +3066,13 @@ impl OhosWindow {
                         if let Some(subscription) = self.move_subscription.borrow().as_ref() {
                             subscription.cancel();
                         }
-                        let button = event_button.or(self.pressed_mouse_button.get());
-                        self.pressed_mouse_button.set(None);
-                        let Some(button) = button else {
+                        let Some(button) = event_button.or(self.pressed_mouse_button.get().first())
+                        else {
                             return;
                         };
+                        let mut held = self.pressed_mouse_button.get();
+                        held.release(button);
+                        self.pressed_mouse_button.set(held);
                         let reopen_keyboard = button == MouseButton::Left
                             && self.mouse_click.borrow().as_ref().is_some_and(|click| {
                                 (position - click.position).magnitude()
@@ -3085,7 +3103,11 @@ impl OhosWindow {
                         }
                         self.dispatch_input(PlatformInput::MouseMove(MouseMoveEvent {
                             position,
-                            pressed_button: self.pressed_mouse_button.get().or(event_button),
+                            pressed_button: self
+                                .pressed_mouse_button
+                                .get()
+                                .first()
+                                .or(event_button),
                             modifiers: self.key_state.borrow().modifiers(),
                         }));
                     }
@@ -3114,7 +3136,7 @@ impl OhosWindow {
                     // Releases and hover exits can both be absent outside a native
                     // window. Reconcile buttons before using re-entry coordinates.
                     if pointer.mouse_buttons_pressed == Some(false) {
-                        if self.pressed_mouse_button.get().is_some() {
+                        if self.pressed_mouse_button.get().first().is_some() {
                             self.cancel_mouse_input();
                         }
                     } else {
@@ -3128,22 +3150,23 @@ impl OhosWindow {
             InputEvent::ArkUi(ArkUiInputEvent::Axis(axis_event)) => {
                 let position = self.pointer_position_from_arkui(axis_event.pointer);
                 self.pointer_position.set(Some(position));
-                let raw_delta = point(axis_event.delta_x as f32, axis_event.delta_y as f32);
-                let delta = if axis_event.pointer.tool_type == UIInputToolType::Touchpad {
-                    self.point_from_device_pixels(raw_delta.x, raw_delta.y)
-                } else {
-                    raw_delta.map(px)
+                let raw = point(axis_event.delta_x, axis_event.delta_y);
+                let scale = *self.scale.borrow();
+                let wheel = axis_event.pointer.source_type == UIInputSourceType::Mouse
+                    && axis_event.pointer.tool_type != UIInputToolType::Touchpad;
+                let packet = ScrollPacket::axis(raw, scale, wheel, axis_event.scroll_step);
+                let Some(packet) = packet else {
+                    return;
                 };
                 let touch_phase = match axis_event.pointer.action {
                     UIInputAction::Down => TouchPhase::Started,
                     UIInputAction::Up | UIInputAction::Cancel => TouchPhase::Ended,
                     UIInputAction::Move => TouchPhase::Moved,
                 };
-                if delta.x != px(0.0)
-                    || delta.y != px(0.0)
-                    || matches!(touch_phase, TouchPhase::Started | TouchPhase::Ended)
-                {
-                    self.dispatch_scroll(position, delta, touch_phase);
+                if packet.should_dispatch(touch_phase) {
+                    #[cfg(feature = "native-input")]
+                    let _native = packet.bind(self.handle.window_id(), scale);
+                    self.dispatch_scroll(position, packet.delta, touch_phase);
                 }
             }
             InputEvent::ArkUi(ArkUiInputEvent::Gesture(
@@ -4817,7 +4840,7 @@ impl PlatformWindow for OhosWindow {
         !self.closed.get()
             && !self.native_drag_pending.get()
             && self.native_pointer_id.get().is_some()
-            && (self.pressed_mouse_button.get().is_some()
+            && (self.pressed_mouse_button.get().first().is_some()
                 || !self.active_touches.borrow().is_empty())
             && self
                 .native_drag
