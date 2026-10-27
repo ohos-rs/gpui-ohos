@@ -13,7 +13,7 @@ test = false
 
 [dependencies]
 anyhow = "1"
-gpui = { git = "https://github.com/ohos-rs/zed", rev = "00542402c992e7a041f110c7d2386c60a40b7038", default-features = false }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "e30095febcfd25ae81d52e59d7d80c2bd21830c6", default-features = false }
 gpui-ohos = { path = "..", default-features = false }
 log = "0.4"
 ohos-hilog-binding = { version = "*", features = ["log"] }

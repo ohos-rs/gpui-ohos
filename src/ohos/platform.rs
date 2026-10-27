@@ -50,9 +50,10 @@ use url::Url;
 use crate::{
     Action, ActivityGuard, AnyWindowHandle, AppLifecyclePhase, BackgroundExecutor, ClipboardItem,
     ClipboardReadError, CursorStyle, ForegroundExecutor, GestureKinds, GestureTuning, KeyContext,
-    Keymap, Menu, MenuItem, OwnedMenu, OwnedMenuItem, PathPromptOptions, Platform, PlatformDisplay,
-    PlatformGestures, PlatformKeyboardLayout, PlatformKeyboardMapper, PlatformTextSystem,
-    PlatformWindow, PriorityQueueReceiver, Result as GpuiResult, RunnableVariant, ScrollPhysics,
+    Keymap, Menu, MenuItem, OperatingSystem, OwnedMenu, OwnedMenuItem, PathPromptOptions, Platform,
+    PlatformDisplay, PlatformGestures, PlatformInfo, PlatformKeyboardLayout,
+    PlatformKeyboardMapper, PlatformTarget, PlatformTextSystem, PlatformWindow,
+    PriorityQueueReceiver, Result as GpuiResult, RunnableVariant, ScrollPhysics,
     SystemNotification, SystemNotificationResponse, Task, ThermalState, WindowAppearance,
     WindowParams, WindowVisibility,
 };
@@ -280,7 +281,7 @@ fn menu_items(
                     // showing a shortcut that belongs only to an auxiliary window.
                     static DEFAULT_CONTEXT: OnceLock<Vec<KeyContext>> = OnceLock::new();
                     let context = DEFAULT_CONTEXT.get_or_init(|| {
-                        let mut context = KeyContext::new_with_defaults();
+                        let mut context = KeyContext::new_with_defaults(OperatingSystem::Linux);
                         context.add("Workspace");
                         context.add("Pane");
                         context.add("Editor");
@@ -1711,6 +1712,19 @@ pub(super) fn resolve_file_paths(uris: &[String]) -> Result<Vec<PathBuf>> {
         .collect()
 }
 
+/// OpenHarmony scroll feel: ArkUI's API 12 friction motion uses the
+/// default friction coefficient `0.75` and decays velocity according to
+/// `v(t) = v₀ · exp(-4.2 · friction · t)` with `t` measured in seconds.
+fn ohos_scroll_physics() -> ScrollPhysics {
+    const DEFAULT_FRICTION: f32 = 0.75;
+    const FRICTION_SCALE: f32 = 4.2;
+    const MILLISECONDS_PER_SECOND: f32 = 1000.;
+
+    ScrollPhysics::Exponential {
+        decay_per_ms: (-FRICTION_SCALE * DEFAULT_FRICTION / MILLISECONDS_PER_SECOND).exp(),
+    }
+}
+
 struct OhosGestures;
 
 impl PlatformGestures for OhosGestures {
@@ -1728,7 +1742,7 @@ impl PlatformGestures for OhosGestures {
             // HarmonyOS touch coordinates are converted to logical pixels before
             // entering GPUI, matching the coordinate space used by Android's
             // portable gesture implementation.
-            scroll_physics: ScrollPhysics::ohos(),
+            scroll_physics: ohos_scroll_physics(),
             ..GestureTuning::default()
         }
     }
@@ -1797,6 +1811,13 @@ impl Platform for OhosPlatform {
 
     fn on_memory_warning(&self, callback: Box<dyn FnMut()>) {
         *self.memory_warning.borrow_mut() = Some(callback);
+    }
+
+    fn platform_info(&self) -> PlatformInfo {
+        PlatformInfo {
+            os: OperatingSystem::Linux,
+            target: PlatformTarget::Native,
+        }
     }
 
     fn gestures(&self) -> Option<Rc<dyn PlatformGestures>> {

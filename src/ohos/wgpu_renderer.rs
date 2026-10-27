@@ -722,6 +722,22 @@ impl WgpuRenderer {
     }
 
     fn mono_sprite_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+        const {
+            assert!(std::mem::offset_of!(MonochromeSprite, order) == 0);
+            assert!(std::mem::offset_of!(MonochromeSprite, pad) == 4);
+            assert!(std::mem::offset_of!(MonochromeSprite, tile) == 8);
+            assert!(std::mem::offset_of!(MonochromeSprite, bounds) == 40);
+            assert!(std::mem::offset_of!(MonochromeSprite, content_mask) == 56);
+            assert!(std::mem::offset_of!(MonochromeSprite, color) == 72);
+            assert!(std::mem::offset_of!(MonochromeSprite, transformation) == 88);
+            assert!(std::mem::offset_of!(gpui::SubpixelSprite, order) == 0);
+            assert!(std::mem::offset_of!(gpui::SubpixelSprite, pad) == 4);
+            assert!(std::mem::offset_of!(gpui::SubpixelSprite, tile) == 8);
+            assert!(std::mem::offset_of!(gpui::SubpixelSprite, bounds) == 40);
+            assert!(std::mem::offset_of!(gpui::SubpixelSprite, content_mask) == 56);
+            assert!(std::mem::offset_of!(gpui::SubpixelSprite, color) == 72);
+            assert!(std::mem::offset_of!(gpui::SubpixelSprite, transformation) == 88);
+        }
         const ATTRIBUTES: [wgpu::VertexAttribute; 13] = [
             wgpu::VertexAttribute {
                 offset: 0,
@@ -731,47 +747,47 @@ impl WgpuRenderer {
             wgpu::VertexAttribute {
                 offset: 8,
                 shader_location: 1,
-                format: wgpu::VertexFormat::Float32x2,
+                format: wgpu::VertexFormat::Uint32x2,
             },
             wgpu::VertexAttribute {
                 offset: 16,
                 shader_location: 2,
-                format: wgpu::VertexFormat::Float32x2,
+                format: wgpu::VertexFormat::Uint32x2,
             },
             wgpu::VertexAttribute {
                 offset: 24,
                 shader_location: 3,
-                format: wgpu::VertexFormat::Float32x2,
+                format: wgpu::VertexFormat::Sint32x2,
             },
             wgpu::VertexAttribute {
                 offset: 32,
                 shader_location: 4,
-                format: wgpu::VertexFormat::Float32x2,
+                format: wgpu::VertexFormat::Sint32x2,
             },
             wgpu::VertexAttribute {
                 offset: 40,
                 shader_location: 5,
-                format: wgpu::VertexFormat::Float32x4,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: 48,
+                shader_location: 6,
+                format: wgpu::VertexFormat::Float32x2,
             },
             wgpu::VertexAttribute {
                 offset: 56,
-                shader_location: 6,
-                format: wgpu::VertexFormat::Uint32x2,
+                shader_location: 7,
+                format: wgpu::VertexFormat::Float32x2,
             },
             wgpu::VertexAttribute {
                 offset: 64,
-                shader_location: 7,
-                format: wgpu::VertexFormat::Uint32x2,
+                shader_location: 8,
+                format: wgpu::VertexFormat::Float32x2,
             },
             wgpu::VertexAttribute {
                 offset: 72,
-                shader_location: 8,
-                format: wgpu::VertexFormat::Sint32x2,
-            },
-            wgpu::VertexAttribute {
-                offset: 80,
                 shader_location: 9,
-                format: wgpu::VertexFormat::Sint32x2,
+                format: wgpu::VertexFormat::Float32x4,
             },
             wgpu::VertexAttribute {
                 offset: 88,
@@ -797,6 +813,16 @@ impl WgpuRenderer {
     }
 
     fn poly_sprite_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+        const {
+            assert!(std::mem::offset_of!(PolychromeSprite, order) == 0);
+            assert!(std::mem::offset_of!(PolychromeSprite, pad) == 4);
+            assert!(std::mem::offset_of!(PolychromeSprite, tile) == 8);
+            assert!(std::mem::offset_of!(PolychromeSprite, grayscale) == 40);
+            assert!(std::mem::offset_of!(PolychromeSprite, opacity) == 44);
+            assert!(std::mem::offset_of!(PolychromeSprite, bounds) == 48);
+            assert!(std::mem::offset_of!(PolychromeSprite, content_mask) == 64);
+            assert!(std::mem::offset_of!(PolychromeSprite, corner_radii) == 80);
+        }
         const ATTRIBUTES: [wgpu::VertexAttribute; 12] = [
             wgpu::VertexAttribute {
                 offset: 0,
@@ -806,57 +832,57 @@ impl WgpuRenderer {
             wgpu::VertexAttribute {
                 offset: 8,
                 shader_location: 1,
-                format: wgpu::VertexFormat::Uint32,
-            },
-            wgpu::VertexAttribute {
-                offset: 12,
-                shader_location: 2,
-                format: wgpu::VertexFormat::Float32,
+                format: wgpu::VertexFormat::Uint32x2,
             },
             wgpu::VertexAttribute {
                 offset: 16,
-                shader_location: 3,
-                format: wgpu::VertexFormat::Float32x2,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Uint32x2,
             },
             wgpu::VertexAttribute {
                 offset: 24,
-                shader_location: 4,
-                format: wgpu::VertexFormat::Float32x2,
+                shader_location: 3,
+                format: wgpu::VertexFormat::Sint32x2,
             },
             wgpu::VertexAttribute {
                 offset: 32,
-                shader_location: 5,
-                format: wgpu::VertexFormat::Float32x2,
+                shader_location: 4,
+                format: wgpu::VertexFormat::Sint32x2,
             },
             wgpu::VertexAttribute {
                 offset: 40,
+                shader_location: 5,
+                format: wgpu::VertexFormat::Uint32,
+            },
+            wgpu::VertexAttribute {
+                offset: 44,
                 shader_location: 6,
-                format: wgpu::VertexFormat::Float32x2,
+                format: wgpu::VertexFormat::Float32,
             },
             wgpu::VertexAttribute {
                 offset: 48,
                 shader_location: 7,
-                format: wgpu::VertexFormat::Float32x4,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: 56,
+                shader_location: 8,
+                format: wgpu::VertexFormat::Float32x2,
             },
             wgpu::VertexAttribute {
                 offset: 64,
-                shader_location: 8,
-                format: wgpu::VertexFormat::Uint32x2,
+                shader_location: 9,
+                format: wgpu::VertexFormat::Float32x2,
             },
             wgpu::VertexAttribute {
                 offset: 72,
-                shader_location: 9,
-                format: wgpu::VertexFormat::Uint32x2,
+                shader_location: 10,
+                format: wgpu::VertexFormat::Float32x2,
             },
             wgpu::VertexAttribute {
                 offset: 80,
-                shader_location: 10,
-                format: wgpu::VertexFormat::Sint32x2,
-            },
-            wgpu::VertexAttribute {
-                offset: 88,
                 shader_location: 11,
-                format: wgpu::VertexFormat::Sint32x2,
+                format: wgpu::VertexFormat::Float32x4,
             },
         ];
         wgpu::VertexBufferLayout {
