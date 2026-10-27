@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     DispatchEventResult, GestureTuning, LongPressEvent, Modifiers, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollWheelEvent,
-    TouchEvent, TouchId, TouchPhase, point, px,
+    MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, ScrollDelta, ScrollEvent,
+    ScrollSource, TouchEvent, TouchId, TouchPhase, point, px,
 };
 
 const MAX_FLING_SPEED: f32 = 8000.;
@@ -545,11 +545,11 @@ fn release_window_control(
 }
 
 fn scroll(position: Point<Pixels>, delta: Point<Pixels>, touch_phase: TouchPhase) -> PlatformInput {
-    PlatformInput::ScrollWheel(ScrollWheelEvent {
+    PlatformInput::Scroll(ScrollEvent {
         position,
         delta: ScrollDelta::Pixels(delta),
         modifiers: Modifiers::default(),
         touch_phase,
+        source: ScrollSource::Touch,
     })
 }
-

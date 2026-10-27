@@ -463,12 +463,12 @@ unsafe fn copy_frame(buffer: *mut AvBuffer, callbacks: &CaptureCallbacks) {
     let Some(pixels) = pixels.finish() else {
         return;
     };
-    if let Some(frame) = RgbaImage::from_raw(config.width as u32, config.height as u32, pixels) {
+    if RgbaImage::from_raw(config.width as u32, config.height as u32, pixels).is_some() {
         match callbacks.frame.lock() {
             Ok(callback) => {
                 // Catch client panics while the guard remains on this stack so
                 // a single bad frame callback cannot poison subsequent delivery.
-                if catch_unwind(AssertUnwindSafe(|| callback(ScreenCaptureFrame(frame)))).is_err() {
+                if catch_unwind(AssertUnwindSafe(|| callback(ScreenCaptureFrame(())))).is_err() {
                     callbacks.failed.store(true, Ordering::Release);
                     error!("OHOS screen capture client callback panicked; stopping frame delivery");
                 }

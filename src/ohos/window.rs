@@ -26,9 +26,7 @@ use openharmony_ability::{
         TouchEvent as OhosTouchEvent, TouchEventData, TouchPointData, TouchPointTool,
     },
 };
-use openharmony_ability_plugin_menu::{
-    MenuClient, MenuCommandItem, MenuPopupCommandsRequest, MenuPopupMenubarRequest,
-};
+use openharmony_ability_plugin_menu::{MenuClient, MenuCommandItem, MenuPopupCommandsRequest};
 use openharmony_ability_plugin_window::{
     WindowClient, WindowCloseSubscription, WindowMoveSubscription, on_window_close_requested,
 };
@@ -46,12 +44,12 @@ use super::wgpu_context::WgpuContext;
 use super::wgpu_renderer::{WgpuRenderer, WgpuSurfaceConfig};
 use super::{mouse_buttons::MouseButtons, scroll_packet::ScrollPacket};
 use crate::{
-    A11yCallbacks, AnyWindowHandle, Bounds, Capslock, CursorStyle, DevicePixels, Edges,
+    A11yCallbacks, AnyWindowHandle, Bounds, Capslock, Corners, CursorStyle, DevicePixels, Edges,
     ForegroundExecutor, FrameRequestSource, GestureTuning, GpuSpecs, KeyDownEvent, Keystroke,
     Modifiers, MouseButton, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MouseUpEvent,
     NavigationDirection, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
     PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    ResizeEdge, Scene, ScrollDelta, ScrollWheelEvent, Size, Task, TextInputAction,
+    ResizeEdge, Scene, ScrollDelta, ScrollEvent, ScrollSource, Size, Task, TextInputAction,
     TextInputConfiguration, TextInputStateChange, TouchEvent, TouchId, TouchPhase,
     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls,
     WindowDecorations, WindowInsets, WindowParams, WindowVisibility, accesskit, point, px, size,
@@ -1260,11 +1258,12 @@ impl OhosWindow {
     ) -> crate::DispatchEventResult {
         Self::dispatch_input_with_callbacks(
             &self.callbacks,
-            PlatformInput::ScrollWheel(ScrollWheelEvent {
+            PlatformInput::Scroll(ScrollEvent {
                 position,
                 delta,
                 modifiers: self.key_state.borrow().modifiers(),
                 touch_phase,
+                source: ScrollSource::Pointer,
             }),
         )
     }
@@ -1819,6 +1818,7 @@ impl OhosWindow {
             },
             // Keyboard overlap is represented by visual_viewport_bounds.
             ime: Edges::default(),
+            corner_radii: Corners::default(),
         }
     }
 
@@ -4053,10 +4053,6 @@ impl PlatformWindow for OhosWindowHandle {
         self.with_window(|window| window.show_window_menu(position))
     }
 
-    fn show_app_menu(&self, position: Point<Pixels>, menu_name: Option<&str>) -> bool {
-        self.with_window(|window| window.show_app_menu(position, menu_name))
-    }
-
     fn start_window_move(&self) {
         self.with_window(|window| window.start_window_move())
     }
@@ -4751,35 +4747,6 @@ impl PlatformWindow for OhosWindow {
                 }
             })
             .detach();
-    }
-
-    fn show_app_menu(&self, position: Point<Pixels>, menu_name: Option<&str>) -> bool {
-        if !self.native_menus {
-            return false;
-        }
-        let Some(app) = self.app.borrow().clone() else {
-            return false;
-        };
-        let request = MenuPopupMenubarRequest {
-            window_id: if self.window_id == 0 {
-                "main".into()
-            } else {
-                self.window_id.to_string()
-            },
-            menu_name: menu_name.map(str::to_owned),
-            x: f32::from(position.x) as f64,
-            y: f32::from(position.y) as f64,
-            restore_focus_id: self.native_menu_focus_id(),
-        };
-        self.foreground_executor
-            .spawn(async move {
-                let result = async { MenuClient::new(&app)?.popup_menubar(request).await }.await;
-                if let Err(error) = result {
-                    warn!("Failed to open OHOS application menu: {error}");
-                }
-            })
-            .detach();
-        true
     }
 
     fn show_window_menu(&self, position: Point<Pixels>) {
