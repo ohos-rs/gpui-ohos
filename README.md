@@ -75,7 +75,6 @@ scrolling, menus, file pickers, clipboard, credentials, screen capture,
 notifications, and application lifecycle.
 
 ```bash
-git submodule update --init --recursive
 cd example
 sh scripts/build-native.sh --release
 ```
