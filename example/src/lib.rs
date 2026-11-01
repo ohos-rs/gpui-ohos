@@ -355,7 +355,12 @@ impl Render for CaptureDemo {
                 self.notification_responses.load(Ordering::Relaxed)
             ))
             .child(format!("Thermal state: {:?}", cx.thermal_state()))
-            .child(format!("Window controls: {:?}", window.window_controls()))
+            .child(format!(
+                "Window controls: {:?}; button layout: {:?}; auto-hide scrollbars: {}",
+                window.window_controls(),
+                cx.button_layout(),
+                cx.should_auto_hide_scrollbars(),
+            ))
             .child(format!(
                 "Layout: {:?}; visual viewport: {:?}",
                 window.viewport_size(),
@@ -797,29 +802,33 @@ fn openharmony_app(app: OpenHarmonyApp) {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| {
+            |window, cx| {
                 let ime = cx.new(ime_demo::ImeDemo::new);
-                let view = cx.new(|cx| CaptureDemo {
-                    capabilities: cx
-                        .new(|_| capabilities_demo::CapabilitiesDemo::new(inner_app.clone())),
-                    ime,
-                    app: inner_app.clone(),
-                    status: "idle".into(),
-                    credentials: "idle".into(),
-                    appearance_step: 0,
-                    appearance_status: "following system".into(),
-                    background_step: 0,
-                    background_appearance: WindowBackgroundAppearance::Opaque,
-                    app_path_status: "not queried".into(),
-                    url_scheme_status: "not checked".into(),
-                    display_status: "not queried".into(),
-                    reopens: reopens.clone(),
-                    notification_responses: notification_responses.clone(),
-                    next_frame_callbacks: Arc::new(AtomicUsize::new(0)),
-                    child_windows: std::array::from_fn(|_| ChildWindowState::new()),
-                    menu_actions: menu_actions.clone(),
-                    frames: Arc::new(AtomicUsize::new(0)),
-                    stream: None,
+                let view = cx.new(|cx| {
+                    cx.observe_button_layout_changed(window, |_, _, cx| cx.notify())
+                        .detach();
+                    CaptureDemo {
+                        capabilities: cx
+                            .new(|_| capabilities_demo::CapabilitiesDemo::new(inner_app.clone())),
+                        ime,
+                        app: inner_app.clone(),
+                        status: "idle".into(),
+                        credentials: "idle".into(),
+                        appearance_step: 0,
+                        appearance_status: "following system".into(),
+                        background_step: 0,
+                        background_appearance: WindowBackgroundAppearance::Opaque,
+                        app_path_status: "not queried".into(),
+                        url_scheme_status: "not checked".into(),
+                        display_status: "not queried".into(),
+                        reopens: reopens.clone(),
+                        notification_responses: notification_responses.clone(),
+                        next_frame_callbacks: Arc::new(AtomicUsize::new(0)),
+                        child_windows: std::array::from_fn(|_| ChildWindowState::new()),
+                        menu_actions: menu_actions.clone(),
+                        frames: Arc::new(AtomicUsize::new(0)),
+                        stream: None,
+                    }
                 });
                 *main_view.borrow_mut() = Some(view.downgrade());
                 view

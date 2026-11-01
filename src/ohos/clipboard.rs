@@ -22,13 +22,16 @@ use openharmony_ability_plugin_clipboard::{
 
 const METADATA_MIME: &str = "application/x-gpui-ohos-text-metadata-v1";
 
+type CachedClipboardItem = Rc<RefCell<Option<(u32, Option<ClipboardItem>)>>>;
+type PendingClipboardWrite = Rc<RefCell<Option<(u64, Option<ClipboardItem>)>>>;
+
 #[derive(Clone)]
 pub(crate) struct OhosClipboard {
     app: Rc<RefCell<Option<OpenHarmonyApp>>>,
     foreground_executor: ForegroundExecutor,
     background_executor: BackgroundExecutor,
-    cache: Rc<RefCell<Option<(u32, Option<ClipboardItem>)>>>,
-    pending_write_item: Rc<RefCell<Option<(u64, Option<ClipboardItem>)>>>,
+    cache: CachedClipboardItem,
+    pending_write_item: PendingClipboardWrite,
     operation: Rc<Cell<u64>>,
     refresh_pending: Rc<Cell<bool>>,
     write_tail: Rc<RefCell<Option<Shared<LocalBoxFuture<'static, ()>>>>>,

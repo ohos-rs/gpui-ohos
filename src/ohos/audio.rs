@@ -44,7 +44,7 @@ impl NativeAudioService {
     ) -> Result<NativeAudioPlayer, NativeAudioError> {
         let client = AudioClient::new(&self.app).map_err(|_| NativeAudioError::Unavailable)?;
         let id = NEXT_PLAYER
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| NativeAudioError::Unavailable)?
             .to_string();
         let (sender, mut receiver) = mpsc::unbounded::<Command>();

@@ -30,6 +30,17 @@ let platform = gpui_ohos::try_current_platform(
 
 Configure the Ability and its ArkTS plugins as shown in the
 [example entry Ability](./example/ohos/entry/src/main/ets/entryability/EntryAbility.ets).
+To load bundled HAP `resources/rawfile` assets or fonts without intermediate FFI
+buffer copies, register `ResourcePlugin` on the ArkTS Ability and attach
+`RawFileAssets`:
+
+```rust
+let assets = gpui_ohos::RawFileAssets::from_app(openharmony_app.clone());
+let application = gpui::Application::with_platform(
+    gpui_ohos::current_platform(openharmony_app, false),
+)
+.with_assets(assets);
+```
 
 ## Features
 

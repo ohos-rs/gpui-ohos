@@ -79,6 +79,8 @@ type MenuActionCallback = Box<dyn FnMut(&dyn Action)>;
 
 pub(crate) struct OhosPlatform {
     app: Rc<RefCell<Option<OpenHarmonyApp>>>,
+    form_factor: super::device::DeviceFormFactor,
+    last_button_layout_enabled: Rc<Cell<bool>>,
     dispatcher: Arc<OhosDispatcher>,
     background_executor: BackgroundExecutor,
     foreground_executor: ForegroundExecutor,
@@ -91,6 +93,7 @@ pub(crate) struct OhosPlatform {
     windows: Rc<RefCell<Vec<Weak<RefCell<OhosWindow>>>>>,
     window_index: Rc<RefCell<FxHashMap<i64, Weak<RefCell<OhosWindow>>>>>,
     pending_window_inputs: Rc<RefCell<FxHashMap<i64, VecDeque<openharmony_ability::InputEvent>>>>,
+    pending_window_status: Rc<RefCell<FxHashMap<i64, i32>>>,
     frame_callback_active: Rc<Cell<bool>>,
     open_urls: OpenUrlsCallback,
     pending_open_uris: Rc<RefCell<VecDeque<String>>>,
@@ -471,6 +474,7 @@ impl OhosPlatform {
         );
 
         let app_slot = Rc::new(RefCell::new(None));
+        let form_factor = super::device::DeviceFormFactor::detect();
         let clipboard = super::clipboard::OhosClipboard::new(
             app_slot.clone(),
             foreground_executor.clone(),
@@ -478,6 +482,8 @@ impl OhosPlatform {
         );
         let platform = Self {
             app: app_slot,
+            form_factor,
+            last_button_layout_enabled: Rc::new(Cell::new(form_factor.is_desktop())),
             dispatcher,
             background_executor,
             foreground_executor,
@@ -490,6 +496,7 @@ impl OhosPlatform {
             windows: Rc::new(RefCell::new(Vec::new())),
             window_index: Rc::new(RefCell::new(FxHashMap::default())),
             pending_window_inputs: Rc::new(RefCell::new(FxHashMap::default())),
+            pending_window_status: Rc::new(RefCell::new(FxHashMap::default())),
             frame_callback_active: Rc::new(Cell::new(false)),
             open_urls: Rc::new(RefCell::new(None)),
             pending_open_uris: Rc::new(RefCell::new(VecDeque::new())),
@@ -630,7 +637,7 @@ impl OhosPlatform {
             warn!("Failed to register OpenHarmony URL plugin: {error}");
         }
         for result in [
-            app.register_plugin(ClipboardBridgePlugin::default()),
+            app.register_plugin(ClipboardBridgePlugin),
             app.register_plugin(FilesBridgePlugin),
             app.register_plugin(NotificationBridgePlugin),
             app.register_plugin(SystemStateBridgePlugin),
@@ -647,9 +654,46 @@ impl OhosPlatform {
         }
         *self.app.borrow_mut() = Some(app.clone());
         *self.keyboard_language.borrow_mut() = Some(app.config().language);
-        // Initialize primary display when app is set
-        *self.primary_display.borrow_mut() = Some(OhosDisplay::new(app.clone()));
+        // Seed displays synchronously via OH_NativeDisplayManager (API 14+) before
+        // async SystemStateBridgePlugin enumeration completes.
+        let (primary, others) = super::display::seed_native_displays(&app);
+        *self.primary_display.borrow_mut() = Some(primary);
+        *self.other_displays.borrow_mut() = others;
         self.dispatcher.set_waker(app.create_waker());
+    }
+
+    fn has_window_button_layout(&self) -> bool {
+        self.form_factor.is_desktop()
+            || self
+                .windows
+                .borrow()
+                .iter()
+                .filter_map(Weak::upgrade)
+                .any(|window| window.borrow().has_window_controls())
+            || self
+                .pending_window_status
+                .borrow()
+                .iter()
+                .any(|(&id, &status)| {
+                    id != 0 || super::device::is_free_window_status(status) == Some(true)
+                })
+    }
+
+    fn sync_button_layout(&self) -> bool {
+        let enabled = self.has_window_button_layout();
+        if self.last_button_layout_enabled.replace(enabled) == enabled {
+            return false;
+        }
+        let windows = self
+            .windows
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect::<Vec<_>>();
+        for window in windows {
+            window.borrow().notify_button_layout_changed();
+        }
+        true
     }
 
     fn handle_foreground_wake(&self) {
@@ -1463,6 +1507,7 @@ impl OhosPlatform {
         self.window_index
             .borrow_mut()
             .retain(|_, window| window.strong_count() != 0);
+        let _ = self.sync_button_layout();
         if live_windows.is_empty() {
             warn!("OhosPlatform: No active windows to handle event");
         }
@@ -1479,13 +1524,26 @@ impl OhosPlatform {
         ) {
             self.invalidate_window_stack();
         }
+        let mut any_status_changed = false;
+        let mut changed_windows: SmallVec<[Rc<RefCell<OhosWindow>>; 2]> = SmallVec::new();
         for (window_id, status) in drain_pending_window_status() {
+            any_status_changed = true;
+            let id = i64::from(window_id);
             self.invalidate_window_stack();
             if let Some(window) = live_windows
                 .iter()
-                .find(|window| window.borrow().window_id() == i64::from(window_id))
+                .find(|window| window.borrow().window_id() == id)
             {
-                window.borrow().apply_window_status(status);
+                if window.borrow().apply_window_status(status) {
+                    changed_windows.push(window.clone());
+                }
+            } else {
+                self.pending_window_status.borrow_mut().insert(id, status);
+            }
+        }
+        if any_status_changed && !self.sync_button_layout() {
+            for window in changed_windows {
+                window.borrow().notify_button_layout_changed();
             }
         }
 
@@ -1494,15 +1552,16 @@ impl OhosPlatform {
         // are updated even when no SubWindowClosed event is emitted.
         if let Event::SubWindowClosed(window_id) = event {
             self.pending_window_inputs.borrow_mut().remove(window_id);
+            self.pending_window_status.borrow_mut().remove(window_id);
         }
         for window_id in drain_pending_window_closes() {
-            self.pending_window_inputs
-                .borrow_mut()
-                .remove(&i64::from(window_id));
+            let id = i64::from(window_id);
+            self.pending_window_inputs.borrow_mut().remove(&id);
+            self.pending_window_status.borrow_mut().remove(&id);
             self.invalidate_window_stack();
             if let Some(window) = live_windows
                 .iter()
-                .find(|window| window.borrow().window_id() == i64::from(window_id))
+                .find(|window| window.borrow().window_id() == id)
             {
                 window.borrow().handle_event(&Event::WindowDestroy);
             }
@@ -1560,6 +1619,7 @@ impl OhosPlatform {
                 _ => window.borrow().handle_event(event),
             }
         }
+        let _ = self.sync_button_layout();
         match event {
             Event::SurfaceCreate => self.publish_menu(0),
             Event::SubWindowSurfaceCreate(window_id) => self.publish_menu(*window_id),
@@ -1569,6 +1629,7 @@ impl OhosPlatform {
         if matches!(event, Event::Destroy) {
             self.pending_open_uris.borrow_mut().clear();
             self.pending_window_inputs.borrow_mut().clear();
+            self.pending_window_status.borrow_mut().clear();
             for window in &live_windows {
                 window.borrow().handle_event(&Event::WindowDestroy);
             }
@@ -1752,6 +1813,8 @@ impl Clone for OhosPlatform {
     fn clone(&self) -> Self {
         Self {
             app: self.app.clone(),
+            form_factor: self.form_factor,
+            last_button_layout_enabled: self.last_button_layout_enabled.clone(),
             dispatcher: self.dispatcher.clone(),
             background_executor: self.background_executor.clone(),
             foreground_executor: self.foreground_executor.clone(),
@@ -1764,6 +1827,7 @@ impl Clone for OhosPlatform {
             windows: self.windows.clone(),
             window_index: self.window_index.clone(),
             pending_window_inputs: self.pending_window_inputs.clone(),
+            pending_window_status: self.pending_window_status.clone(),
             frame_callback_active: self.frame_callback_active.clone(),
             open_urls: self.open_urls.clone(),
             pending_open_uris: self.pending_open_uris.clone(),
@@ -2030,6 +2094,15 @@ impl Platform for OhosPlatform {
     }
 
     fn is_screen_capture_supported(&self) -> bool {
+        if !super::device::can_i_use("SystemCapability.Multimedia.Media.AVScreenCapture") {
+            return false;
+        }
+        if let Some(display) = self.primary_display.borrow().as_ref() {
+            let (width, height, _) = display.dimensions_and_scale();
+            if width > 0 && height > 0 {
+                return true;
+            }
+        }
         self.app.borrow().as_ref().is_some_and(|app| {
             let (width, height) = app.display_size();
             i32::try_from(width).is_ok_and(|width| width > 0)
@@ -2140,6 +2213,7 @@ impl Platform for OhosPlatform {
                 (0, None)
             };
             let window = OhosWindow::new(OhosWindowContext {
+                form_factor: self.form_factor,
                 native_menus: self.native_menus,
                 windows: Rc::downgrade(&self.windows),
                 window_index: Rc::downgrade(&self.window_index),
@@ -2159,6 +2233,10 @@ impl Platform for OhosPlatform {
                 window_id,
                 fallback_atlas,
             })?;
+
+            if let Some(status) = self.pending_window_status.borrow_mut().remove(&window_id) {
+                let _ = window.apply_window_status(status);
+            }
 
             // GPUI fetches sprite_atlas during window initialization and caches it.
             // Renderer must be ready at open_window time to avoid caching a broken atlas.
@@ -2182,6 +2260,7 @@ impl Platform for OhosPlatform {
                 }
             }
             self.invalidate_window_stack();
+            let _ = self.sync_button_layout();
             Ok(Box::new(super::window::OhosWindowHandle::new(window)))
         } else {
             Err(anyhow::anyhow!("OpenHarmonyApp not set"))
@@ -2189,7 +2268,8 @@ impl Platform for OhosPlatform {
     }
 
     fn button_layout(&self) -> Option<gpui::WindowButtonLayout> {
-        Some(gpui::WindowButtonLayout::linux_default())
+        self.has_window_button_layout()
+            .then(gpui::WindowButtonLayout::linux_default)
     }
 
     fn window_appearance(&self) -> WindowAppearance {
@@ -2625,7 +2705,7 @@ impl Platform for OhosPlatform {
     }
 
     fn should_auto_hide_scrollbars(&self) -> bool {
-        false
+        self.form_factor.should_auto_hide_scrollbars()
     }
 
     fn read_from_clipboard(&self) -> Option<ClipboardItem> {
