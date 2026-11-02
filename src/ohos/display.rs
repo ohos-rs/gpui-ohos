@@ -159,50 +159,43 @@ impl PlatformDisplay for OhosDisplay {
 }
 
 pub(crate) fn seed_native_displays(app: &OpenHarmonyApp) -> (OhosDisplay, Vec<OhosDisplay>) {
-    #[cfg(target_env = "ohos")]
-    {
-        if super::device::sdk_api_version() < 14 {
-            return (OhosDisplay::new(app.clone()), Vec::new());
-        }
-        let primary_info = openharmony_ability::display::primary_display().ok();
-        let all_infos = openharmony_ability::display::all_displays().ok();
-        let primary_id = primary_info.as_ref().map(|info| info.id).or_else(|| {
+    if super::device::sdk_api_version() < 14 {
+        return (OhosDisplay::new(app.clone()), Vec::new());
+    }
+    let primary_info = openharmony_ability::display::primary_display().ok();
+    let all_infos = openharmony_ability::display::all_displays().ok();
+    let primary_id = primary_info.as_ref().map(|info| info.id).or_else(|| {
+        all_infos
+            .as_ref()
+            .and_then(|list| list.first().map(|info| info.id))
+    });
+
+    let primary_snapshot = primary_info
+        .as_ref()
+        .and_then(|info| snapshot_from_native(info, true))
+        .or_else(|| {
+            let target_id = primary_id?;
             all_infos
-                .as_ref()
-                .and_then(|list| list.first().map(|info| info.id))
+                .as_ref()?
+                .iter()
+                .find(|info| info.id == target_id)
+                .and_then(|info| snapshot_from_native(info, true))
         });
 
-        let primary_snapshot = primary_info
-            .as_ref()
-            .and_then(|info| snapshot_from_native(info, true))
-            .or_else(|| {
-                let target_id = primary_id?;
-                all_infos
-                    .as_ref()?
-                    .iter()
-                    .find(|info| info.id == target_id)
-                    .and_then(|info| snapshot_from_native(info, true))
-            });
+    let primary = match primary_snapshot {
+        Some(snapshot) => OhosDisplay::from_snapshot(app.clone(), snapshot),
+        None => OhosDisplay::new(app.clone()),
+    };
 
-        let primary = match primary_snapshot {
-            Some(snapshot) => OhosDisplay::from_snapshot(app.clone(), snapshot),
-            None => OhosDisplay::new(app.clone()),
-        };
+    let others = all_infos
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|info| info.is_alive && Some(info.id) != primary_id)
+        .filter_map(|info| snapshot_from_native(&info, false))
+        .map(|snapshot| OhosDisplay::from_snapshot(app.clone(), snapshot))
+        .collect();
 
-        let others = all_infos
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|info| info.is_alive && Some(info.id) != primary_id)
-            .filter_map(|info| snapshot_from_native(&info, false))
-            .map(|snapshot| OhosDisplay::from_snapshot(app.clone(), snapshot))
-            .collect();
-
-        (primary, others)
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-        (OhosDisplay::new(app.clone()), Vec::new())
-    }
+    (primary, others)
 }
 
 fn snapshot_from_native(info: &NativeDisplayInfo, is_default: bool) -> Option<DisplaySnapshot> {
@@ -225,7 +218,7 @@ fn snapshot_from_native(info: &NativeDisplayInfo, is_default: bool) -> Option<Di
 }
 
 fn query_native_available_area(display_id: u32) -> Option<AvailableArea> {
-    #[cfg(all(target_env = "ohos", feature = "api-26"))]
+    #[cfg(feature = "api-26")]
     {
         if super::device::sdk_api_version() >= 20
             && let Ok(rect) =

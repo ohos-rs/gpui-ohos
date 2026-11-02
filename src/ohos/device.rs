@@ -69,28 +69,14 @@ pub(crate) const fn is_free_window_status(status: i32) -> Option<bool> {
 
 /// Returns the OpenHarmony base SDK API version (`OH_GetSdkApiVersion`).
 pub(crate) fn sdk_api_version() -> u32 {
-    #[cfg(target_env = "ohos")]
-    {
-        ohos_device_binding::sdk_api_version()
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-        0
-    }
+    ohos_device_binding::sdk_api_version()
 }
 
 /// Returns the distribution OS API version (`OH_GetDistributionOSApiVersion`),
 /// encoded as `M * 10000 + S * 100 + F` (for example, `60000` for HarmonyOS 6.0.0).
 #[allow(dead_code)]
 pub(crate) fn distribution_os_api_version() -> u32 {
-    #[cfg(target_env = "ohos")]
-    {
-        ohos_device_binding::distribution_os_api_version()
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-        0
-    }
+    ohos_device_binding::distribution_os_api_version()
 }
 
 /// Synchronously queries whether a `SystemCapability.*` identifier is supported
@@ -99,25 +85,11 @@ pub(crate) fn can_i_use(syscap: &str) -> bool {
     if syscap.is_empty() || syscap.contains('\0') {
         return false;
     }
-    #[cfg(target_env = "ohos")]
-    {
-        ohos_init_binding::canIUse(syscap)
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-        false
-    }
+    ohos_init_binding::canIUse(syscap)
 }
 
 fn raw_device_type() -> Option<&'static str> {
-    #[cfg(target_env = "ohos")]
-    {
-        ohos_device_binding::device_type()
-    }
-    #[cfg(not(target_env = "ohos"))]
-    {
-        None
-    }
+    ohos_device_binding::device_type()
 }
 
 #[cfg(test)]
