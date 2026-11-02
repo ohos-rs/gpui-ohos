@@ -220,16 +220,17 @@ fn snapshot_from_native(info: &NativeDisplayInfo, is_default: bool) -> Option<Di
 fn query_native_available_area(display_id: u32) -> Option<AvailableArea> {
     #[cfg(feature = "api-26")]
     {
-        if super::device::sdk_api_version() >= 20
-            && let Ok(rect) =
+        if super::device::sdk_api_version() >= 20 {
+            if let Ok(rect) =
                 openharmony_ability::display::display_available_area(u64::from(display_id))
-        {
-            return Some(AvailableArea {
-                left: rect.left,
-                top: rect.top,
-                width: i32::try_from(rect.width).ok()?,
-                height: i32::try_from(rect.height).ok()?,
-            });
+            {
+                return Some(AvailableArea {
+                    left: rect.left,
+                    top: rect.top,
+                    width: i32::try_from(rect.width).ok()?,
+                    height: i32::try_from(rect.height).ok()?,
+                });
+            }
         }
     }
     let _ = display_id;

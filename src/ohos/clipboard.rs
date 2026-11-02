@@ -117,10 +117,10 @@ impl OhosClipboard {
             return item.clone();
         }
         let revision = self.app.borrow().as_ref().and_then(Self::revision);
-        if let Some((cached_revision, item)) = self.cache.borrow().as_ref()
-            && Some(*cached_revision) == revision
-        {
-            return item.clone();
+        if let Some((cached_revision, item)) = self.cache.borrow().as_ref() {
+            if Some(*cached_revision) == revision {
+                return item.clone();
+            }
         }
         *self.cache.borrow_mut() = None;
         self.schedule_refresh();
