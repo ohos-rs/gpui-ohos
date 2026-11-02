@@ -1,0 +1,34 @@
+[package]
+name = "gpui-ohos-renderer-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Host-only harness: compile production renderer modules without OHOS N-API.
+[workspace]
+
+[features]
+default = ["fast", "vulkan"]
+fast = []
+gles = ["wgpu/gles"]
+vulkan = ["wgpu/vulkan"]
+
+[dependencies]
+anyhow = "1"
+bytemuck = "1"
+etagere = "0.2"
+gpui = { package = "gpui-fast", version = "=0.1.13", default-features = false, features = ["test-support"] }
+itertools = "0.14"
+log = "0.4"
+parking_lot = "0.12"
+profiling = "1"
+raw-window-handle = "0.6"
+rustc-hash = "2"
+smol = "2"
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "metal", "wgsl"] }
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0

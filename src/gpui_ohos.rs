@@ -4,6 +4,9 @@
 //! [`gpui::Application::with_platform`], matching the architecture used by
 //! `gpui-mobile` for Android and iOS.
 
+#[cfg(feature = "fast")]
+extern crate gpui_fast as gpui;
+
 mod ohos;
 
 pub use gpui::*;
