@@ -221,11 +221,11 @@ fn reconcile_idle_sleep(
 fn apply_menu_validation(items: &mut [MenuItemData], enabled: &HashMap<String, bool>) -> bool {
     let mut changed = false;
     for item in items {
-        if let Some(value) = enabled.get(&item.id)
-            && item.enabled != Some(*value)
-        {
-            item.enabled = Some(*value);
-            changed = true;
+        if let Some(value) = enabled.get(&item.id) {
+            if item.enabled != Some(*value) {
+                item.enabled = Some(*value);
+                changed = true;
+            }
         }
         if let Some(children) = item.submenu_items.as_mut() {
             changed |= apply_menu_validation(children, enabled);
@@ -647,10 +647,10 @@ impl OhosPlatform {
                 warn!("Failed to register OpenHarmony platform plugin: {error}");
             }
         }
-        if self.native_menus
-            && let Err(error) = app.register_plugin(MenuBridgePlugin)
-        {
-            warn!("Failed to register OpenHarmony menu plugin: {error}");
+        if self.native_menus {
+            if let Err(error) = app.register_plugin(MenuBridgePlugin) {
+                warn!("Failed to register OpenHarmony menu plugin: {error}");
+            }
         }
         *self.app.borrow_mut() = Some(app.clone());
         *self.keyboard_language.borrow_mut() = Some(app.config().language);
@@ -779,10 +779,10 @@ impl OhosPlatform {
                         .get(&window_id)
                         .and_then(Weak::upgrade)
                 });
-                if let Some(window) = window
-                    && !OhosWindow::dispatch_window_menu_command(&window, action_id)
-                {
-                    warn!("Unknown OHOS window menu item {id}");
+                if let Some(window) = window {
+                    if !OhosWindow::dispatch_window_menu_command(&window, action_id) {
+                        warn!("Unknown OHOS window menu item {id}");
+                    }
                 }
                 continue;
             }
@@ -928,10 +928,15 @@ impl OhosPlatform {
                     *self.system_wake.borrow_mut() = callback;
                 }
                 "available-area" => {
-                    if let Some(area) = event.available_area
-                        && let Some(display) = self.primary_display.borrow().as_ref()
-                    {
-                        display.set_available_area(area.left, area.top, area.width, area.height);
+                    if let Some(area) = event.available_area {
+                        if let Some(display) = self.primary_display.borrow().as_ref() {
+                            display.set_available_area(
+                                area.left,
+                                area.top,
+                                area.width,
+                                area.height,
+                            );
+                        }
                     }
                 }
                 "displays" => {
@@ -942,10 +947,10 @@ impl OhosPlatform {
                         continue;
                     };
                     let default = displays.iter().find(|display| display.is_default).cloned();
-                    if let Some(default) = default
-                        && let Some(primary) = self.primary_display.borrow().as_ref()
-                    {
-                        primary.update_snapshot(default);
+                    if let Some(default) = default {
+                        if let Some(primary) = self.primary_display.borrow().as_ref() {
+                            primary.update_snapshot(default);
+                        }
                     }
                     let mut others = self.other_displays.borrow_mut();
                     let previous = std::mem::take(&mut *others);
@@ -1109,10 +1114,10 @@ impl OhosPlatform {
                             .filter(|id| changed.contains(id))
                             .or_else(|| changed.iter().copied().find(|id| *id == 0))
                             .or_else(|| changed.last().copied());
-                        if let Some(focus_id) = focus_id
-                            && let Err(error) = client.focus_window(focus_id).await
-                        {
-                            warn!("Failed to focus restored OHOS window {focus_id}: {error}");
+                        if let Some(focus_id) = focus_id {
+                            if let Err(error) = client.focus_window(focus_id).await {
+                                warn!("Failed to focus restored OHOS window {focus_id}: {error}");
+                            }
                         }
                         if failed.is_empty() {
                             platform.focus_before_hide.set(None);
@@ -1433,12 +1438,11 @@ impl OhosPlatform {
             }
             *self.memory_warning.borrow_mut() = callback;
         }
-        if let Event::NewWant { uri } = event
-            && !uri.is_empty()
-            && !self.queue_notification_uri(uri)
-        {
-            self.pending_open_uris.borrow_mut().push_back(uri.clone());
-            self.dispatch_open_uris();
+        if let Event::NewWant { uri } = event {
+            if !uri.is_empty() && !self.queue_notification_uri(uri) {
+                self.pending_open_uris.borrow_mut().push_back(uri.clone());
+                self.dispatch_open_uris();
+            }
         }
         // Ability orders input and executor wakes in one FIFO. Only a wake turn
         // may run queued futures; doing so inside input would overtake that FIFO.
@@ -1454,27 +1458,29 @@ impl OhosPlatform {
         // Surface creation and GPU initialization can finish in either order. Start
         // before routing this event to windows: the callback can create those windows.
         let mut launched = false;
-        if let Some(result) = self.gpu_context.get()
-            && let Some(callback) = launch.take_callback(true)
-        {
-            match result {
-                Ok(_) => {
-                    callback();
-                    launched = true;
+        if let Some(result) = self.gpu_context.get() {
+            if let Some(callback) = launch.take_callback(true) {
+                match result {
+                    Ok(_) => {
+                        callback();
+                        launched = true;
+                    }
+                    Err(error) => self.report_gpu_initialization_failure(error),
                 }
-                Err(error) => self.report_gpu_initialization_failure(error),
             }
         }
-        if launched && let Some(app) = self.app.borrow().as_ref() {
-            // NativeAbility stores the cold-start Want after onAbilityCreate.
-            // GPUI may register on_open_urls before that store happens, so
-            // drain it once the first surface and app callbacks are ready.
-            let initial_uri = app.take_initial_want_uri();
-            if !initial_uri.is_empty() && !self.queue_notification_uri(&initial_uri) {
-                self.pending_open_uris.borrow_mut().push_front(initial_uri);
-                self.dispatch_open_uris();
+        if launched {
+            if let Some(app) = self.app.borrow().as_ref() {
+                // NativeAbility stores the cold-start Want after onAbilityCreate.
+                // GPUI may register on_open_urls before that store happens, so
+                // drain it once the first surface and app callbacks are ready.
+                let initial_uri = app.take_initial_want_uri();
+                if !initial_uri.is_empty() && !self.queue_notification_uri(&initial_uri) {
+                    self.pending_open_uris.borrow_mut().push_front(initial_uri);
+                    self.dispatch_open_uris();
+                }
+                self.dispatch_notification_responses();
             }
-            self.dispatch_notification_responses();
         }
 
         if let Event::WindowResize { window_id, .. } = event {
@@ -2251,12 +2257,12 @@ impl Platform for OhosPlatform {
             self.window_index
                 .borrow_mut()
                 .insert(window_id, Rc::downgrade(&window));
-            if let Some(pending) = self.pending_window_inputs.borrow_mut().remove(&window_id)
-                && !pending.is_empty()
-            {
-                self.cursor_window_id.set(window_id);
-                for input in pending {
-                    window.borrow().handle_input_event(&input);
+            if let Some(pending) = self.pending_window_inputs.borrow_mut().remove(&window_id) {
+                if !pending.is_empty() {
+                    self.cursor_window_id.set(window_id);
+                    for input in pending {
+                        window.borrow().handle_input_event(&input);
+                    }
                 }
             }
             self.invalidate_window_stack();

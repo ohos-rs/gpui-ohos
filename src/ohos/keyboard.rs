@@ -111,7 +111,7 @@ impl OhosKeyState {
                             character.to_ascii_lowercase()
                         }
                     } else if let Some((plain, shifted)) = printable_key_pair(code)
-                        && (character == plain || character == shifted)
+                        .filter(|&(plain, shifted)| character == plain || character == shifted)
                     {
                         if self.modifiers.shift { shifted } else { plain }
                     } else {

@@ -355,32 +355,31 @@ impl OhosWindow {
         } else {
             let weak_window = Rc::downgrade(window);
             let window = window.borrow();
-            if !window.closed.get()
-                && !window.released.get()
-                && let Some(client) = window.window_client()
-            {
-                let window_id = window.window_id;
-                window
-                    .foreground_executor
-                    .spawn(async move {
-                        if let Err(error) = client.show_window(window_id).await {
-                            warn!(
-                                "Failed to show OHOS window {window_id} after vetoed close: {error}"
-                            );
-                        }
-                        if let Err(error) = client.focus_window(window_id).await {
-                            warn!(
-                                "Failed to focus OHOS window {window_id} after vetoed close: {error}"
-                            );
-                        }
-                        if let Some(window) = weak_window.upgrade() {
-                            let window = window.borrow();
-                            if !window.closed.get() && !window.released.get() {
-                                window.focus_native_surface();
+            if !window.closed.get() && !window.released.get() {
+                if let Some(client) = window.window_client() {
+                    let window_id = window.window_id;
+                    window
+                        .foreground_executor
+                        .spawn(async move {
+                            if let Err(error) = client.show_window(window_id).await {
+                                warn!(
+                                    "Failed to show OHOS window {window_id} after vetoed close: {error}"
+                                );
                             }
-                        }
-                    })
-                    .detach();
+                            if let Err(error) = client.focus_window(window_id).await {
+                                warn!(
+                                    "Failed to focus OHOS window {window_id} after vetoed close: {error}"
+                                );
+                            }
+                            if let Some(window) = weak_window.upgrade() {
+                                let window = window.borrow();
+                                if !window.closed.get() && !window.released.get() {
+                                    window.focus_native_surface();
+                                }
+                            }
+                        })
+                        .detach();
+                }
             }
         }
     }
@@ -404,10 +403,10 @@ impl OhosWindow {
             return;
         }
         let app = self.app.borrow().clone();
-        if let Some(app) = app
-            && let Err(error) = app.request_xcomponent_focus_for(self.window_id)
-        {
-            warn!("Failed to focus OHOS render surface: {error}");
+        if let Some(app) = app {
+            if let Err(error) = app.request_xcomponent_focus_for(self.window_id) {
+                warn!("Failed to focus OHOS render surface: {error}");
+            }
         }
     }
 
@@ -470,10 +469,10 @@ impl OhosWindow {
             .set(self.background_generation.get().wrapping_add(1));
         self.background_pending.set(false);
         // The native surface survives, but queued edits still belong to the closing editor.
-        if let Some(app) = self.app.borrow().as_ref()
-            && let Err(error) = app.reset_ime_for(0)
-        {
-            warn!("Failed to reset transferred OHOS editor: {error}");
+        if let Some(app) = self.app.borrow().as_ref() {
+            if let Err(error) = app.reset_ime_for(0) {
+                warn!("Failed to reset transferred OHOS editor: {error}");
+            }
         }
         let child_id = self.window_id;
         std::mem::swap(&mut self.window_id, &mut main.window_id);
@@ -631,11 +630,12 @@ impl OhosWindow {
             drop(adapter);
             // Closed GPUI windows have no registry entry to refresh. Surface
             // recreation still deactivates the live window's accessibility.
-            if !self.closed.get()
-                && let Some(callbacks) = self.a11y_callbacks.borrow().as_ref()
-                && let Ok(callbacks) = callbacks.lock()
-            {
-                (callbacks.deactivation)();
+            if !self.closed.get() {
+                if let Some(callbacks) = self.a11y_callbacks.borrow().as_ref() {
+                    if let Ok(callbacks) = callbacks.lock() {
+                        (callbacks.deactivation)();
+                    }
+                }
             }
         }
     }
@@ -669,6 +669,10 @@ impl OhosWindow {
                 .map(|app| appearance_for_color_mode(app.config().color_mode))
                 .unwrap_or_default()
         });
+        let input_ready = app
+            .borrow()
+            .as_ref()
+            .is_some_and(|app| app.is_text_input_ready_for(window_id));
         let bounds = params.bounds;
         let frames = WindowFrames::new(
             window_id,
@@ -764,11 +768,7 @@ impl OhosWindow {
             presentation: PresentationDemand::default(),
             defer_presentation: Cell::new(false),
             surface_available: Cell::new(false),
-            input_ready: Cell::new(
-                app.borrow()
-                    .as_ref()
-                    .is_some_and(|app| app.is_text_input_ready_for(window_id)),
-            ),
+            input_ready: Cell::new(input_ready),
             surface_focused: Cell::new(true),
             force_render: Cell::new(false),
             gpu_context,
@@ -1357,11 +1357,12 @@ impl OhosWindow {
         if !self.input_ready.get() {
             return;
         }
-        if let Some(app) = self.app.borrow().as_ref()
-            && let Err(error) =
+        if let Some(app) = self.app.borrow().as_ref() {
+            if let Err(error) =
                 app.set_text_input_active_for(self.window_id, active && self.surface_focused.get())
-        {
-            warn!("Failed to update OHOS text input focus: {error}");
+            {
+                warn!("Failed to update OHOS text input focus: {error}");
+            }
         }
     }
 
@@ -1422,18 +1423,18 @@ impl OhosWindow {
             return;
         };
         #[cfg(feature = "api-26")]
-        if super::device::sdk_api_version() >= 26
-            && let Err(error) = app.with_ime_for(self.window_id, |ime| {
+        if super::device::sdk_api_version() >= 26 {
+            if let Err(error) = app.with_ime_for(self.window_id, |ime| {
                 ime.set_consume_key_events(true);
-            })
-        {
-            self.finish_keyboard_attempt(
-                attempt,
-                generation,
-                show_keyboard,
-                Err(error.to_string()),
-            );
-            return;
+            }) {
+                self.finish_keyboard_attempt(
+                    attempt,
+                    generation,
+                    show_keyboard,
+                    Err(error.to_string()),
+                );
+                return;
+            }
         }
         let result = if show_keyboard {
             app.try_show_keyboard_for(self.window_id)
@@ -1643,21 +1644,21 @@ impl OhosWindow {
 
     fn hide_keyboard_if_needed(&self) {
         self.cancel_keyboard_retry();
-        if self.keyboard_visible.replace(false)
-            && let Some(app) = self.app.borrow().as_ref()
-        {
-            app.hide_keyboard_for(self.window_id);
+        if self.keyboard_visible.replace(false) {
+            if let Some(app) = self.app.borrow().as_ref() {
+                app.hide_keyboard_for(self.window_id);
+            }
         }
     }
 
     fn detach_ime(&self) {
-        if let Some(app) = self.app.borrow().as_ref()
-            && let Err(error) = app.try_detach_ime_for(self.window_id)
-        {
-            warn!(
-                "Failed to detach OHOS IME for window {}: {error}",
-                self.window_id
-            );
+        if let Some(app) = self.app.borrow().as_ref() {
+            if let Err(error) = app.try_detach_ime_for(self.window_id) {
+                warn!(
+                    "Failed to detach OHOS IME for window {}: {error}",
+                    self.window_id
+                );
+            }
         }
     }
 
@@ -1866,13 +1867,13 @@ impl OhosWindow {
             AvoidAreaType::Cutout,
             AvoidAreaType::NavigationIndicator,
         ] {
-            if let Some(area) = app.avoid_area_for(self.window_id, kind)
-                && area.visible
-            {
-                top = top.max(area.top_rect.height.max(0));
-                right = right.max(area.right_rect.width.max(0));
-                bottom = bottom.max(area.bottom_rect.height.max(0));
-                left = left.max(area.left_rect.width.max(0));
+            if let Some(area) = app.avoid_area_for(self.window_id, kind) {
+                if area.visible {
+                    top = top.max(area.top_rect.height.max(0));
+                    right = right.max(area.right_rect.width.max(0));
+                    bottom = bottom.max(area.bottom_rect.height.max(0));
+                    left = left.max(area.left_rect.width.max(0));
+                }
             }
         }
 
@@ -2228,17 +2229,19 @@ impl OhosWindow {
                 if let Err(error) = client.set_window_decoration_flags(window_id, flags).await {
                     warn!("Failed to apply OHOS window controls: {error}");
                 }
-                if let Some((width, height)) = min_size
-                    && let Err(error) = client
+                if let Some((width, height)) = min_size {
+                    if let Err(error) = client
                         .set_window_limits(window_id, width, height, 0, 0)
                         .await
-                {
-                    warn!("Failed to apply OHOS window minimum size: {error}");
+                    {
+                        warn!("Failed to apply OHOS window minimum size: {error}");
+                    }
                 }
                 // Older SDKs have no draggable switch; custom GPUI dragging still checks this flag.
-                if !movable && let Err(error) = client.set_window_draggable(window_id, false).await
-                {
-                    warn!("Failed to disable OHOS native window dragging: {error}");
+                if !movable {
+                    if let Err(error) = client.set_window_draggable(window_id, false).await {
+                        warn!("Failed to disable OHOS native window dragging: {error}");
+                    }
                 }
             })
             .detach();
@@ -2324,15 +2327,14 @@ impl OhosWindow {
                         .borrow()
                         .as_ref()
                         .map(|app| app.content_rect_for(window_id));
-                    if let Some(rect) = content_rect
-                        && rect.width > 1
-                        && rect.height > 1
-                    {
-                        let scale = window.scale_factor();
-                        window.bounds.borrow_mut().size = size(
-                            px(rect.width as f32 / scale),
-                            px(rect.height as f32 / scale),
-                        );
+                    if let Some(rect) = content_rect {
+                        if rect.width > 1 && rect.height > 1 {
+                            let scale = window.scale_factor();
+                            window.bounds.borrow_mut().size = size(
+                                px(rect.width as f32 / scale),
+                                px(rect.height as f32 / scale),
+                            );
+                        }
                     }
                     window.refresh_keyboard_overlap_device_px();
                     window.notify_window_mode_changed();
@@ -2804,10 +2806,10 @@ impl OhosWindow {
                 if next {
                     self.update_visibility(WindowVisibility::Visible);
                 }
-                if let Some(adapter) = self.a11y_adapter.borrow().as_ref()
-                    && let Err(error) = adapter.set_host_focus_state(next)
-                {
-                    warn!("Failed to update OHOS accessibility focus: {error}");
+                if let Some(adapter) = self.a11y_adapter.borrow().as_ref() {
+                    if let Err(error) = adapter.set_host_focus_state(next) {
+                        warn!("Failed to update OHOS accessibility focus: {error}");
+                    }
                 }
                 if self.active.replace(next) != next {
                     self.invalidate_pending_edit();
@@ -2936,12 +2938,12 @@ impl OhosWindow {
                     // provides no document text.
                     snapshot.unwrap_or_default()
                 };
-                if app.is_text_input_ready_for(window_id)
-                    && let Some(window) = window.and_then(|window| window.upgrade())
-                {
-                    window
-                        .borrow()
-                        .update_ime(true, |ime| ime.try_update_text_state(state));
+                if app.is_text_input_ready_for(window_id) {
+                    if let Some(window) = window.and_then(|window| window.upgrade()) {
+                        window
+                            .borrow()
+                            .update_ime(true, |ime| ime.try_update_text_state(state));
+                    }
                 }
             })
             .detach();
@@ -3372,9 +3374,10 @@ impl OhosWindow {
                     EnterKey::from(action as u32),
                     EnterKey::Newline | EnterKey::Unspecified
                 )
-                && let Some(handler) = handler_ref.borrow_mut().as_mut()
             {
-                handler.replace_text_in_range(None, "\n");
+                if let Some(handler) = handler_ref.borrow_mut().as_mut() {
+                    handler.replace_text_in_range(None, "\n");
+                }
             }
             return;
         }
@@ -3521,17 +3524,17 @@ impl OhosWindow {
                 Ok(paths) => paths,
                 Err(error) => {
                     warn!("Failed to resolve OHOS dropped files: {error:#}");
-                    if matches!(drag.phase, DragPhase::Drop)
-                        && let Some(app) = self.app.borrow().clone()
-                    {
-                        self.background_executor
-                            .spawn(super::platform::show_platform_error(
-                                app,
-                                self.window_id,
-                                "Unable to open dropped files",
-                                format!("{error:#}"),
-                            ))
-                            .detach();
+                    if matches!(drag.phase, DragPhase::Drop) {
+                        if let Some(app) = self.app.borrow().clone() {
+                            self.background_executor
+                                .spawn(super::platform::show_platform_error(
+                                    app,
+                                    self.window_id,
+                                    "Unable to open dropped files",
+                                    format!("{error:#}"),
+                                ))
+                                .detach();
+                        }
                     }
                     Vec::new()
                 }
@@ -3635,12 +3638,12 @@ impl OhosWindow {
             } else if let Some(character) = character {
                 // ArkUI sends this callback only after the IME declines the key.
                 // Numeric-keypad/space input still needs a text insertion path.
-                if let Some(handler) = self.input_handler.borrow_mut().as_mut()
-                    && handler.query_accepts_text_input()
-                {
-                    handler.unmark_text();
-                    handler.replace_text_in_range(None, &character);
-                    consumed = true;
+                if let Some(handler) = self.input_handler.borrow_mut().as_mut() {
+                    if handler.query_accepts_text_input() {
+                        handler.unmark_text();
+                        handler.replace_text_in_range(None, &character);
+                        consumed = true;
+                    }
                 }
                 self.schedule_ime_text_update();
             }
@@ -3844,10 +3847,8 @@ impl HasWindowHandle for OhosWindowHandle {
         &self,
     ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         let window = self.inner.borrow();
-        window
-            .app
-            .borrow()
-            .as_ref()
+        let app = window.app.borrow();
+        app.as_ref()
             .and_then(|app| app.native_window_for(window.window_id))
             .and_then(|native_window| native_window.raw_window_handle())
             .map(|raw_handle| unsafe { raw_window_handle::WindowHandle::borrow_raw(raw_handle) })
@@ -4584,7 +4585,8 @@ impl PlatformWindow for OhosWindow {
                                     window.callbacks.borrow_mut().pending_inputs.clear();
                                     return;
                                 }
-                                window.callbacks.borrow_mut().pending_inputs.pop_front()
+                                let next = window.callbacks.borrow_mut().pending_inputs.pop_front();
+                                next
                             };
                             let Some(input) = next else {
                                 return;
@@ -4623,10 +4625,10 @@ impl PlatformWindow for OhosWindow {
 
     fn a11y_tree_update(&self, update: accesskit::TreeUpdate) {
         self.initialize_accessibility();
-        if let Some(adapter) = self.a11y_adapter.borrow().as_ref()
-            && let Err(error) = adapter.update_if_active(|| update)
-        {
-            warn!("Failed to update OHOS accessibility tree: {error}");
+        if let Some(adapter) = self.a11y_adapter.borrow().as_ref() {
+            if let Err(error) = adapter.update_if_active(|| update) {
+                warn!("Failed to update OHOS accessibility tree: {error}");
+            }
         }
     }
 
@@ -4725,12 +4727,12 @@ impl PlatformWindow for OhosWindow {
         }
         // Initialize renderer lazily if not already initialized
         // This ensures native_window is available (after SurfaceCreate event)
-        if self.renderer.borrow().is_none()
-            && let Err(e) = self.initialize_renderer()
-        {
-            warn!("OhosWindow: Failed to initialize renderer in draw(): {}", e);
-            self.presentation.record(Presentation::Unavailable);
-            return;
+        if self.renderer.borrow().is_none() {
+            if let Err(e) = self.initialize_renderer() {
+                warn!("OhosWindow: Failed to initialize renderer in draw(): {}", e);
+                self.presentation.record(Presentation::Unavailable);
+                return;
+            }
         }
 
         // Use WGPU renderer to render the scene.
@@ -4897,10 +4899,10 @@ impl PlatformWindow for OhosWindow {
             return;
         }
         self.begin_manipulation(None);
-        if self.manipulation.get().is_some()
-            && let Some(subscription) = self.move_subscription.borrow().as_ref()
-        {
-            subscription.request();
+        if self.manipulation.get().is_some() {
+            if let Some(subscription) = self.move_subscription.borrow().as_ref() {
+                subscription.request();
+            }
         }
     }
 

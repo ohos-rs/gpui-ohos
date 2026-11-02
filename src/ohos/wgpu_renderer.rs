@@ -195,7 +195,7 @@ impl WgpuRenderer {
                 surface_caps
                     .formats
                     .iter()
-                    .find(|f| !f.has_srgb_suffix())
+                    .find(|f| !f.is_srgb())
                     .copied()
             })
             .unwrap_or(surface_caps.formats[0]);
