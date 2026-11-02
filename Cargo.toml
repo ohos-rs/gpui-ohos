@@ -1,6 +1,6 @@
 [workspace]
 members = []
-exclude = ["example", "example/ohos/vendor/openharmony-ability", "example/ohos/vendor/openharmony-ability/crates/*"]
+exclude = ["example"]
 resolver = "2"
 
 [workspace.package]
@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-accesskit_ohos = { git = "https://github.com/richerfu/accesskit.git", rev = "ea2d8c4", features = ["api-15"] }
+accesskit_ohos = { git = "https://github.com/richerfu/accesskit.git", rev = "aa8688e89b8ba65f6e12a8cfd542a785d8efd471", features = ["api-15"] }
 anyhow = "1"
 bytemuck = "1"
 crossbeam-channel = "0.5"
@@ -24,25 +24,27 @@ gpui = { git = "https://github.com/zed-industries/zed", rev = "e30095febcfd25ae8
 itertools = "0.14.0"
 image = { version = "0.25.1", default-features = false }
 log = "0.4"
-ohos-accessibility-binding = "0.1"
-ohos-asset-binding = "0.1.5"
-ohos-fileuri-binding = "0.1"
-ohos-fileshare-binding = "0.1"
-ohos-vsync-binding = { version = "0.3.1", default-features = false, features = ["api-20"] }
+ohos-accessibility-binding = "0.2"
+ohos-asset-binding = "0.1.6"
+ohos-device-binding = "0.1"
+ohos-fileuri-binding = "0.2.4"
+ohos-fileshare-binding = "0.2.4"
+ohos-init-binding = "0.1.4"
+ohos-resource-manager-binding = "0.3.6"
+ohos-vsync-binding = { version = "0.3.2", default-features = false, features = ["api-20"] }
 napi-ohos = "=1.2.0"
 napi-derive-ohos = "=1.2.0"
-# GPUI uses owned ArkUI key events, mouse cancellation, and native file drag/drop on every backend.
-# Coherent D3/D4 source contract; upstream Ability/binding releases remain blockers.
-openharmony-ability = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3", features = ["keyboard", "mouse", "drag"] }
-openharmony-ability-plugin-audio = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-menu = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-notification = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-system-state = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-app-control = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-clipboard = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3", features = ["api-18"] }
-openharmony-ability-plugin-files = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-url = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
-openharmony-ability-plugin-window = { git = "https://github.com/harmony-contrib/openharmony-ability.git", rev = "8d66b703f9044a966eaedd720a61ed797049982d", version = "=1.0.0-beta.3" }
+openharmony-ability = { version = "1.0.0-beta.4", features = ["keyboard", "mouse", "drag"] }
+openharmony-ability-plugin-audio = "1.0.0-beta.3"
+openharmony-ability-plugin-menu = "1.0.0-beta.4"
+openharmony-ability-plugin-notification = "1.0.0-beta.4"
+openharmony-ability-plugin-resource = "1.0.0-beta.4"
+openharmony-ability-plugin-system-state = "1.0.0-beta.4"
+openharmony-ability-plugin-app-control = "1.0.0-beta.4"
+openharmony-ability-plugin-clipboard = { version = "1.0.0-beta.4", features = ["api-18"] }
+openharmony-ability-plugin-files = "1.0.0-beta.4"
+openharmony-ability-plugin-url = "1.0.0-beta.4"
+openharmony-ability-plugin-window = "1.0.0-beta.4"
 parking_lot = "0.12.1"
 profiling = "1"
 serde = { version = "1", features = ["derive"] }
@@ -98,13 +100,17 @@ image.workspace = true
 log.workspace = true
 ohos-accessibility-binding.workspace = true
 ohos-asset-binding.workspace = true
+ohos-device-binding.workspace = true
 ohos-fileuri-binding.workspace = true
 ohos-fileshare-binding.workspace = true
+ohos-init-binding.workspace = true
+ohos-resource-manager-binding.workspace = true
 ohos-vsync-binding = { workspace = true, optional = true }
 openharmony-ability.workspace = true
 openharmony-ability-plugin-audio = { workspace = true, optional = true }
 openharmony-ability-plugin-menu.workspace = true
 openharmony-ability-plugin-notification.workspace = true
+openharmony-ability-plugin-resource.workspace = true
 openharmony-ability-plugin-system-state.workspace = true
 openharmony-ability-plugin-app-control.workspace = true
 openharmony-ability-plugin-clipboard.workspace = true

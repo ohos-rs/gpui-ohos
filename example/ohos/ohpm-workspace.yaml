@@ -1,5 +1,0 @@
-# Resolve the Ability source packages' workspace:* dependencies in this app.
-packages:
-  - "entry"
-  - "vendor/openharmony-ability/native_ability"
-  - "vendor/openharmony-ability/plugins/*"

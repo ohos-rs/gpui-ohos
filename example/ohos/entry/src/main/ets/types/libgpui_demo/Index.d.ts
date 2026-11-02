@@ -98,6 +98,10 @@ export interface FileDialogResponse {
   filter: number
 }
 
+export interface ResourceManagerReadyResponse {
+  accepted: boolean
+}
+
 export interface AbilityInitContext {
   basePath?: string
   prefPath?: string
@@ -133,6 +137,21 @@ export interface EnvironmentCallback {
 
 export interface KeyboardCallback {
   onKeyboardHeightChange: (arg: number) => void
+}
+
+/** Identifies a ready FrameNode. Decoding never attaches it. */
+export interface NativeNodeReady {
+  targetId: number
+}
+
+/** Synchronous notification before an ArkTS owner disposes its content. */
+export interface NativeNodeRetiring {
+  targetId: number
+}
+
+/** Identifies a ready wrapper and NodeContent slot. Decoding never mounts either one. */
+export interface NativeSubtreeReady {
+  targetId: number
 }
 
 export interface NodeAcknowledgement {
@@ -641,6 +660,20 @@ export interface WindowStateResponse {
   value: boolean
 }
 
+/** Status-bar settings; zero selects the component's window. */
+export interface WindowStatusBarRequest {
+  /** Window ID, or zero for the component's window. */
+  windowId: number
+  /** Whether the status bar is visible. */
+  enabled: boolean
+  /** White text/icons when true, black when false. */
+  lightContent: boolean
+  /** Optional background, in ARGB. */
+  background?: number
+  /** Animate visibility changes. */
+  animated: boolean
+}
+
 export interface WindowTitleRequest {
   windowId: number
   title: string
@@ -728,6 +761,6 @@ export declare function onBridgeLifecycle(kind: string): void
   */
 export declare function onBridgeSyncEvent(pluginId: string, event: string, requestTypeName: string, responseTypeName: string, value: unknown): unknown
 
-export declare function render(slot: NodeContent, renderOwner: string, nativeWindowId: number): void
+export declare function render(slot: NodeContent, renderOwner: string, nativeWindowId?: number | undefined | null): void
 
-export declare function renderWindow(slot: NodeContent, renderOwner: string, windowId: number, nativeWindowId: number): void
+export declare function renderWindow(slot: NodeContent, renderOwner: string, windowId: number, nativeWindowId?: number | undefined | null): void

@@ -15,6 +15,7 @@ pub use ohos::{
 #[cfg(feature = "grid")]
 pub use ohos::{GridLayoutError, GridLayoutRequest, GridTextCell};
 pub use ohos::{ImagePolicy, ImageRegistrationError, PremultipliedImage, RasterImage};
+pub use ohos::{RawFileAssets, ResourceBridgePlugin};
 
 #[cfg(feature = "native-input")]
 pub use ohos::{NativePointerPosition, NativeScrollDelta};

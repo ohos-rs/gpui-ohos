@@ -63,8 +63,7 @@ Studio, or set `signingConfigs` and the product's `signingConfig` in
 `build-profile.json5`. Then build with DevEco Studio or its command-line tools:
 
 ```sh
-cargo install ohpm-cli --version 0.3.0 --locked
-ohpm-rs install --all
+ohpm install --all
 hvigorw assembleHap --mode module -p product=default
 ```
 
@@ -86,9 +85,3 @@ The existing mixed check compares exact text, nonempty metadata, PNG bytes and
 file paths. Empty metadata is an unsupported empty binary representation;
 embedded-NUL plain text is rejected rather than lossy-converted. This demo is
 not a terminal or arbitrary binary-MIME acceptance fixture.
-
-The source packages use `workspace:*` dependencies, which require `ohpm-rs` for
-installation. The native and ArkTS dependencies use the same pinned Ability
-submodule. Run
-`git submodule update --init --recursive` before building either side. The native
-render exports receive the actual native window ID from this matching runtime.

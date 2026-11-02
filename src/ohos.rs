@@ -4,6 +4,7 @@ mod capture_pixels;
 mod clipboard;
 mod credentials;
 mod cursor_visibility;
+mod device;
 mod dispatcher;
 mod display;
 mod file_access;
@@ -22,6 +23,7 @@ mod platform_options;
 mod pointer_position;
 mod presentation;
 mod quad_pipeline;
+mod raw_file_assets;
 mod render_cache;
 mod screen_capture;
 #[cfg(feature = "native-input")]
@@ -84,6 +86,8 @@ impl PlatformServices {
 }
 
 pub use image_alpha::{ImagePolicy, ImageRegistrationError, PremultipliedImage, RasterImage};
+pub use openharmony_ability_plugin_resource::ResourceBridgePlugin;
+pub use raw_file_assets::RawFileAssets;
 
 #[cfg(feature = "native-input")]
 pub use pointer_position::NativePointerPosition;

@@ -62,6 +62,7 @@ type WindowList = RefCell<Vec<Weak<RefCell<OhosWindow>>>>;
 type WindowIndex = RefCell<FxHashMap<i64, Weak<RefCell<OhosWindow>>>>;
 
 pub(crate) struct OhosWindowContext {
+    pub(crate) form_factor: super::device::DeviceFormFactor,
     pub(crate) native_menus: bool,
     pub(crate) windows: Weak<WindowList>,
     pub(crate) window_index: Weak<WindowIndex>,
@@ -83,6 +84,7 @@ pub(crate) struct OhosWindowContext {
 }
 
 pub(crate) struct OhosWindow {
+    form_factor: super::device::DeviceFormFactor,
     native_menus: bool,
     windows: Weak<WindowList>,
     window_index: Weak<WindowIndex>,
@@ -109,6 +111,7 @@ pub(crate) struct OhosWindow {
     min_size: Option<Size<Pixels>>,
     frames: Rc<WindowFrames>,
     closed: Cell<bool>,
+    free_window: Cell<bool>,
     maximized: Rc<Cell<bool>>,
     fullscreen: Rc<Cell<bool>>,
     background_appearance: Rc<Cell<WindowBackgroundAppearance>>,
@@ -270,6 +273,7 @@ struct WindowCallbacks {
     should_close: Option<Box<dyn FnMut() -> bool>>,
     close: Option<Box<dyn FnOnce()>>,
     appearance_changed: Option<Box<dyn FnMut()>>,
+    button_layout_changed: Option<Box<dyn FnMut()>>,
     hit_test_window_control: Option<Box<dyn FnMut() -> Option<WindowControlArea>>>,
 }
 
@@ -492,6 +496,13 @@ impl OhosWindow {
         };
         let maximized = self.maximized.get();
         let fullscreen = self.fullscreen.get();
+        self.free_window.set(if fullscreen {
+            false
+        } else if maximized {
+            true
+        } else {
+            main.free_window.get()
+        });
         let restore_main = main.maximized.get() || main.fullscreen.get();
         self.foreground_executor
             .spawn(async move {
@@ -543,6 +554,7 @@ impl OhosWindow {
                         });
                         window.refresh_insets();
                         window.emit_resize_callback();
+                        window.notify_button_layout_changed();
                         window.sync_frame_delivery();
                         window.force_render.set(true);
                         window.schedule_frame();
@@ -630,6 +642,7 @@ impl OhosWindow {
 
     pub(crate) fn new(context: OhosWindowContext) -> Result<Self> {
         let OhosWindowContext {
+            form_factor,
             native_menus,
             windows,
             window_index,
@@ -669,6 +682,7 @@ impl OhosWindow {
         // At that point, native_window from OpenHarmonyApp will be available.
 
         Ok(Self {
+            form_factor,
             native_menus,
             windows,
             window_index,
@@ -701,6 +715,7 @@ impl OhosWindow {
             min_size: params.window_min_size,
             frames,
             closed: Cell::new(false),
+            free_window: Cell::new(false),
             maximized: Rc::new(Cell::new(false)),
             fullscreen: Rc::new(Cell::new(false)),
             background_appearance: Rc::new(Cell::new(WindowBackgroundAppearance::Opaque)),
@@ -742,6 +757,7 @@ impl OhosWindow {
                 should_close: None,
                 close: None,
                 appearance_changed: None,
+                button_layout_changed: None,
                 hit_test_window_control: None,
             })),
             renderer: RefCell::new(None),
@@ -878,7 +894,50 @@ impl OhosWindow {
         self.request_touch_momentum_frame();
     }
 
-    pub(crate) fn apply_window_status(&self, status: i32) {
+    pub(crate) fn has_window_controls(&self) -> bool {
+        !self.closed.get()
+            && !self.released.get()
+            && (self.window_id != 0 || self.form_factor.is_desktop() || self.free_window.get())
+    }
+
+    pub(crate) fn notify_button_layout_changed(&self) {
+        if self.closed.get() || self.released.get() {
+            return;
+        }
+        let window_id = self.window_id;
+        let window_index = self.window_index.clone();
+        let released = self.released.clone();
+        self.foreground_executor
+            .spawn(async move {
+                if released.get() {
+                    return;
+                }
+                let window = window_index
+                    .upgrade()
+                    .and_then(|index| index.borrow().get(&window_id).and_then(Weak::upgrade));
+                let Some(window) = window else {
+                    return;
+                };
+                let callbacks = {
+                    let window = window.borrow();
+                    if window.closed.get()
+                        || window.released.get()
+                        || !Rc::ptr_eq(&window.released, &released)
+                    {
+                        return;
+                    }
+                    window.callbacks.clone()
+                };
+                let mut callback = callbacks.borrow_mut().button_layout_changed.take();
+                if let Some(ref mut callback) = callback {
+                    callback();
+                }
+                callbacks.borrow_mut().button_layout_changed = callback;
+            })
+            .detach();
+    }
+
+    pub(crate) fn apply_window_status(&self, status: i32) -> bool {
         // OHOS WindowStatusType: FULL_SCREEN=1, MAXIMIZE=2,
         // MINIMIZE=3, FLOATING=4, SPLIT_SCREEN=5.
         if !(1..=5).contains(&status) {
@@ -886,19 +945,32 @@ impl OhosWindow {
                 "Unknown OHOS window status {status} for window {}",
                 self.window_id
             );
-            return;
+            return false;
         }
         // Minimization changes visibility, not the mode to restore or persist.
         if status == 3 {
             self.update_visibility(WindowVisibility::Hidden);
-            return;
+            return false;
         }
+        let free_changed = super::device::is_free_window_status(status)
+            .is_some_and(|is_free| self.free_window.replace(is_free) != is_free);
         let was_maximized = self.maximized.replace(status == 2);
         let was_fullscreen = self.fullscreen.replace(status == 1);
         self.update_visibility(WindowVisibility::Visible);
-        if was_maximized != self.maximized.get() || was_fullscreen != self.fullscreen.get() {
+        if free_changed
+            && self.free_window.get()
+            && self.requested_decorations.get() == WindowDecorations::Client
+            && self.decorations.get() != WindowDecorations::Client
+        {
+            self.request_decorations(WindowDecorations::Client);
+        }
+        if free_changed
+            || was_maximized != self.maximized.get()
+            || was_fullscreen != self.fullscreen.get()
+        {
             self.notify_window_mode_changed();
         }
+        free_changed
     }
 
     fn notify_window_mode_changed(&self) {
@@ -1350,7 +1422,7 @@ impl OhosWindow {
             return;
         };
         #[cfg(feature = "api-26")]
-        if openharmony_ability::sdk_api_version() >= 26
+        if super::device::sdk_api_version() >= 26
             && let Err(error) = app.with_ime_for(self.window_id, |ime| {
                 ime.set_consume_key_events(true);
             })
@@ -4009,6 +4081,10 @@ impl PlatformWindow for OhosWindowHandle {
         self.with_window(|window| window.on_appearance_changed(callback))
     }
 
+    fn on_button_layout_changed(&self, callback: Box<dyn FnMut()>) {
+        self.with_window(|window| window.on_button_layout_changed(callback))
+    }
+
     fn draw(&self, scene: &Scene) {
         self.with_window(|window| window.draw(scene))
     }
@@ -4628,6 +4704,10 @@ impl PlatformWindow for OhosWindow {
         self.callbacks.borrow_mut().appearance_changed = Some(callback);
     }
 
+    fn on_button_layout_changed(&self, callback: Box<dyn FnMut()>) {
+        self.callbacks.borrow_mut().button_layout_changed = Some(callback);
+    }
+
     fn draw(&self, scene: &Scene) {
         if self.closed.get()
             || !self.surface_available.get()
@@ -4703,6 +4783,11 @@ impl PlatformWindow for OhosWindow {
             "OHOS window {} requested decorations: {decorations:?}",
             self.window_id
         );
+        // Full-screen mobile/tablet main stages have no window frame controls until
+        // entering free-window mode; apply_window_status reapplies the retained request.
+        if !self.has_window_controls() {
+            return;
+        }
         // GPUI can request decorations before asynchronous OS window creation
         // finishes. SurfaceCreate reapplies the retained request once ready.
         if self
@@ -4914,10 +4999,13 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn window_decorations(&self) -> crate::Decorations {
-        if self.decorations.get() == WindowDecorations::Client {
-            crate::Decorations::Client {
-                tiling: Default::default(),
-            }
+        if self.decorations.get() == WindowDecorations::Client && self.has_window_controls() {
+            let tiling = if self.fullscreen.get() || self.maximized.get() {
+                crate::Tiling::tiled()
+            } else {
+                crate::Tiling::default()
+            };
+            crate::Decorations::Client { tiling }
         } else {
             crate::Decorations::Server
         }
@@ -4932,7 +5020,8 @@ impl PlatformWindow for OhosWindow {
     }
 
     fn window_controls(&self) -> WindowControls {
-        let available = self.window_id != 0 || openharmony_ability::is_desktop_device();
+        let available =
+            self.window_id != 0 || self.form_factor.is_desktop() || self.free_window.get();
         WindowControls {
             fullscreen: available,
             maximize: available && self.is_resizable,
