@@ -48,6 +48,7 @@ let application = gpui::Application::with_platform(
 | --- | --- |
 | `gles` | OpenGL ES rendering (enabled by default). |
 | `vulkan` | Vulkan rendering. |
+| `fast` | Official `gpui-fast` core with scroll tiles and analytic rounded clipping; see [Fast rendering](docs/fast.md). |
 | `native-vsync` | Use NativeVSync frame callbacks instead of XComponent callbacks. |
 | `audio` | Opt-in owned-file audio playback (`NativeAudioService` / `AudioBridgePlugin`). |
 | `grid` | Experimental fixed-cell terminal shaping (`FontCatalog::layout_grid`). |

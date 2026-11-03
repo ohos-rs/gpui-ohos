@@ -1,3 +1,6 @@
+// Use the core selected by the platform, including its optional Fast feature.
+extern crate gpui_ohos as gpui;
+
 use std::{
     cell::RefCell,
     rc::Rc,

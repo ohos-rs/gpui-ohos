@@ -21,6 +21,7 @@ etagere = "0.2"
 font-kit = { package = "zed-font-kit", version = "0.14.1-zed", features = ["source-fontconfig-dlopen"] }
 futures = "0.3.34"
 gpui = { package = "gpui-pre", version = "0.3.11", default-features = false }
+gpui-fast = { package = "gpui-fast", version = "=0.1.13", default-features = false }
 itertools = "0.14.0"
 image = { version = "0.25.1", default-features = false }
 log = "0.4"
@@ -70,6 +71,7 @@ repository = "https://github.com/ohos-rs/gpui-ohos"
 
 [features]
 default = ["gles"]
+fast = ["dep:gpui-fast"]
 gles = ["wgpu/gles"]
 vulkan = ["wgpu/vulkan"]
 native-vsync = ["dep:ohos-vsync-binding"]
@@ -86,6 +88,7 @@ path = "src/gpui_ohos.rs"
 [dependencies]
 accesskit_ohos.workspace = true
 gpui.workspace = true
+gpui-fast = { workspace = true, optional = true }
 anyhow.workspace = true
 bytemuck.workspace = true
 cosmic-text.workspace = true

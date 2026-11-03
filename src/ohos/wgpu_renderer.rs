@@ -2,15 +2,22 @@ use super::{
     path_targets::PathTargets, presentation::Presentation, wgpu_atlas::WgpuAtlas,
     wgpu_context::WgpuContext,
 };
+#[cfg(feature = "fast")]
+#[path = "fast/mod.rs"]
+mod fast;
+
 use bytemuck::{Pod, Zeroable};
+#[cfg(not(feature = "fast"))]
+use gpui::{AtlasTextureId, Path, PrimitiveBatch};
 use gpui::{
-    AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point,
-    PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Underline,
-    get_gamma_correction_ratios,
+    Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Point, PolychromeSprite, Quad,
+    ScaledPixels, Scene, Shadow, Size, Underline, get_gamma_correction_ratios,
 };
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+#[cfg(not(feature = "fast"))]
 use std::cell::RefCell;
 use std::num::NonZeroU64;
+#[cfg(not(feature = "fast"))]
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -92,6 +99,8 @@ pub(super) struct WgpuPipelines {
 pub(super) struct WgpuBindGroupLayouts {
     globals: wgpu::BindGroupLayout,
     textures: wgpu::BindGroupLayout,
+    #[cfg(feature = "fast")]
+    rounded_clip: fast::rounded_clip::Bindings,
 }
 
 #[derive(Clone, Copy)]
@@ -100,6 +109,7 @@ struct InstanceBinding {
     stride: u64,
 }
 
+#[cfg(not(feature = "fast"))]
 struct SceneInstanceBindings {
     quads: InstanceBinding,
     shadows: InstanceBinding,
@@ -125,13 +135,20 @@ pub struct WgpuRenderer {
     path_globals_bind_group: wgpu::BindGroup,
     instance_buffer: wgpu::Buffer,
     instance_buffer_capacity: u64,
+    #[cfg(not(feature = "fast"))]
     instance_buffer_alignment: u64,
     path_targets: Option<PathTargets>,
     rendering_params: RenderingParameters,
     adapter_info: wgpu::AdapterInfo,
+    #[cfg(feature = "fast")]
+    fast_frame: fast::frame::FrameState,
+    #[cfg(not(feature = "fast"))]
     path_vertices: RefCell<Vec<PathRasterizationVertex>>,
+    #[cfg(not(feature = "fast"))]
     path_sprites: RefCell<Vec<PathSprite>>,
+    #[cfg(not(feature = "fast"))]
     path_batch_bounds: RefCell<Vec<Bounds<ScaledPixels>>>,
+    #[cfg(not(feature = "fast"))]
     polychrome_sprites: RefCell<Vec<PolychromeSprite>>,
 }
 
@@ -191,13 +208,7 @@ impl WgpuRenderer {
             .iter()
             .find(|f| surface_caps.formats.contains(f))
             .copied()
-            .or_else(|| {
-                surface_caps
-                    .formats
-                    .iter()
-                    .find(|f| !f.is_srgb())
-                    .copied()
-            })
+            .or_else(|| surface_caps.formats.iter().find(|f| !f.is_srgb()).copied())
             .unwrap_or(surface_caps.formats[0]);
 
         let pick_alpha_mode =
@@ -256,7 +267,16 @@ impl WgpuRenderer {
         let shader = context.render_shader.get_or_init(|| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("gpui_shaders"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shaders.wgsl").into()),
+                source: {
+                    #[cfg(feature = "fast")]
+                    {
+                        fast::rounded_clip::shader_source(include_str!("shaders.wgsl"))
+                    }
+                    #[cfg(not(feature = "fast"))]
+                    {
+                        wgpu::ShaderSource::Wgsl(include_str!("shaders.wgsl").into())
+                    }
+                },
             })
         });
         let pipelines = context.render_pipelines.get_or_insert_with(key, || {
@@ -303,6 +323,7 @@ impl WgpuRenderer {
             mapped_at_creation: false,
         });
 
+        #[cfg(not(feature = "fast"))]
         let instance_buffer_alignment = 4;
         let initial_instance_buffer_capacity = 2 * 1024 * 1024;
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -376,13 +397,20 @@ impl WgpuRenderer {
             path_globals_bind_group,
             instance_buffer,
             instance_buffer_capacity: initial_instance_buffer_capacity,
+            #[cfg(not(feature = "fast"))]
             instance_buffer_alignment,
             path_targets: None,
             rendering_params,
             adapter_info,
+            #[cfg(feature = "fast")]
+            fast_frame: fast::frame::FrameState::default(),
+            #[cfg(not(feature = "fast"))]
             path_vertices: RefCell::new(Vec::new()),
+            #[cfg(not(feature = "fast"))]
             path_sprites: RefCell::new(Vec::new()),
+            #[cfg(not(feature = "fast"))]
             path_batch_bounds: RefCell::new(Vec::new()),
+            #[cfg(not(feature = "fast"))]
             polychrome_sprites: RefCell::new(Vec::new()),
         };
         renderer.write_global_params(true);
@@ -443,7 +471,12 @@ impl WgpuRenderer {
             ],
         });
 
-        WgpuBindGroupLayouts { globals, textures }
+        WgpuBindGroupLayouts {
+            globals,
+            textures,
+            #[cfg(feature = "fast")]
+            rounded_clip: fast::rounded_clip::Bindings::new(device),
+        }
     }
 
     fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
@@ -929,6 +962,13 @@ impl WgpuRenderer {
                 .copied()
                 .map(Some)
                 .collect::<Vec<_>>();
+            #[cfg(feature = "fast")]
+            let bind_group_layouts = {
+                let mut layouts_with_clip = bind_group_layouts;
+                layouts_with_clip.resize(3, None);
+                layouts_with_clip.push(Some(&layouts.rounded_clip.layout));
+                layouts_with_clip
+            };
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(&format!("{name}_layout")),
                 bind_group_layouts: &bind_group_layouts,
@@ -1159,6 +1199,10 @@ impl WgpuRenderer {
             self.surface.configure(&self.device, &self.surface_config);
 
             self.path_targets = None;
+            #[cfg(feature = "fast")]
+            {
+                self.fast_frame = fast::frame::FrameState::default();
+            }
             self.write_global_params(false);
         }
     }
@@ -1256,6 +1300,30 @@ impl WgpuRenderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        #[cfg(feature = "fast")]
+        {
+            let result =
+                fast::frame::record_into(self, scene, &frame_view, wgpu::Color::TRANSPARENT);
+            self.queue.present(frame);
+            match result {
+                Ok(_) => Presentation::Presented,
+                Err(error) => {
+                    log::error!("Failed to record gpui-fast scene: {error:#}");
+                    Presentation::Unavailable
+                }
+            }
+        }
+        #[cfg(not(feature = "fast"))]
+        self.draw_pre_scene(scene, &frame_view, frame)
+    }
+
+    #[cfg(not(feature = "fast"))]
+    fn draw_pre_scene(
+        &mut self,
+        scene: &Scene,
+        frame_view: &wgpu::TextureView,
+        frame: wgpu::SurfaceTexture,
+    ) -> Presentation {
         // Retain targets across path frames, but allocate nothing for windows that
         // never draw paths. Resize invalidates them before the next path frame.
         if !scene.paths.is_empty() && self.path_targets.is_none() {
@@ -1310,7 +1378,7 @@ impl WgpuRenderer {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("main_pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &frame_view,
+                        view: frame_view,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -1354,7 +1422,7 @@ impl WgpuRenderer {
                                 pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                     label: Some("main_pass_continued"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: &frame_view,
+                                        view: frame_view,
                                         resolve_target: None,
                                         ops: wgpu::Operations {
                                             load: wgpu::LoadOp::Load,
@@ -1439,6 +1507,7 @@ impl WgpuRenderer {
         }
     }
 
+    #[cfg(not(feature = "fast"))]
     fn draw_monochrome_sprites(
         &self,
         range: Range<usize>,
@@ -1456,6 +1525,7 @@ impl WgpuRenderer {
         )
     }
 
+    #[cfg(not(feature = "fast"))]
     fn draw_subpixel_sprites(
         &self,
         range: Range<usize>,
@@ -1472,6 +1542,7 @@ impl WgpuRenderer {
         self.draw_instances_with_texture(range, binding, &tex_info.bind_group, pipeline, pass)
     }
 
+    #[cfg(not(feature = "fast"))]
     fn draw_polychrome_sprites(
         &self,
         range: Range<usize>,
@@ -1489,6 +1560,7 @@ impl WgpuRenderer {
         )
     }
 
+    #[cfg(not(feature = "fast"))]
     fn draw_quads(
         &self,
         range: Range<usize>,
@@ -1520,6 +1592,7 @@ impl WgpuRenderer {
         true
     }
 
+    #[cfg(not(feature = "fast"))]
     fn draw_instances(
         &self,
         range: Range<usize>,
@@ -1539,6 +1612,7 @@ impl WgpuRenderer {
         true
     }
 
+    #[cfg(not(feature = "fast"))]
     fn draw_instances_with_texture(
         &self,
         range: Range<usize>,
@@ -1560,6 +1634,7 @@ impl WgpuRenderer {
         true
     }
 
+    #[cfg(not(feature = "fast"))]
     fn write_scene_instances(
         &self,
         scene: &Scene,
@@ -1650,6 +1725,7 @@ impl WgpuRenderer {
         }
     }
 
+    #[cfg(not(feature = "fast"))]
     fn padded_path_batch_bounds(paths: &[Path<ScaledPixels>]) -> Bounds<ScaledPixels> {
         let mut bounds = paths[0].clipped_bounds();
         for path in paths.iter().skip(1) {
@@ -1668,6 +1744,7 @@ impl WgpuRenderer {
         }
     }
 
+    #[cfg(not(feature = "fast"))]
     fn next_coalesced_path_range(&self, scene: &Scene, start_path_index: usize) -> Range<usize> {
         let mut group_bounds = self.path_batch_bounds.borrow_mut();
         group_bounds.clear();
@@ -1697,6 +1774,7 @@ impl WgpuRenderer {
         start_path_index..group_end
     }
 
+    #[cfg(not(feature = "fast"))]
     fn draw_paths_from_intermediate(
         &self,
         paths: &[Path<ScaledPixels>],
@@ -1742,6 +1820,7 @@ impl WgpuRenderer {
         )
     }
 
+    #[cfg(not(feature = "fast"))]
     fn draw_paths_to_intermediate(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -1824,6 +1903,7 @@ impl WgpuRenderer {
         self.instance_buffer_capacity = new_capacity;
     }
 
+    #[cfg(not(feature = "fast"))]
     fn write_to_instance_buffer(
         &self,
         instance_offset: &mut u64,
