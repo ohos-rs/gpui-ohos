@@ -65,5 +65,13 @@ A working Metal or Vulkan adapter is needed for the pixel tests.
 cargo test --manifest-path tests/renderer/Cargo.toml
 ```
 
+The included example selects the backend's core through `gpui-ohos` and
+supports the same optional feature. Check either selection with:
+
+```sh
+ohrs cargo --disable-target -- check --release --target aarch64-unknown-linux-ohos --manifest-path example/Cargo.toml
+ohrs cargo --disable-target -- check --release --target aarch64-unknown-linux-ohos --manifest-path example/Cargo.toml --features fast
+```
+
 Native-surface lifetime and GLES behavior must also be checked on an OHOS
-application. In NearSend, build the complete application with `--features fast`.
+application. The example can be packaged with or without its `fast` feature.
