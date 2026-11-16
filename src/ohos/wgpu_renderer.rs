@@ -142,6 +142,8 @@ pub struct WgpuRenderer {
     adapter_info: wgpu::AdapterInfo,
     #[cfg(feature = "fast")]
     fast_frame: fast::frame::FrameState,
+    #[cfg(feature = "fast")]
+    dynamic_textures: Arc<super::dynamic_textures::DynamicTextures>,
     #[cfg(not(feature = "fast"))]
     path_vertices: RefCell<Vec<PathRasterizationVertex>>,
     #[cfg(not(feature = "fast"))]
@@ -404,6 +406,8 @@ impl WgpuRenderer {
             adapter_info,
             #[cfg(feature = "fast")]
             fast_frame: fast::frame::FrameState::default(),
+            #[cfg(feature = "fast")]
+            dynamic_textures: context.dynamic_textures.clone(),
             #[cfg(not(feature = "fast"))]
             path_vertices: RefCell::new(Vec::new()),
             #[cfg(not(feature = "fast"))]

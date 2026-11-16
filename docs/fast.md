@@ -1,13 +1,13 @@
 # Fast core and rendering
 
 The optional `fast` Cargo feature selects the unmodified crates.io
-`gpui-fast 0.1.13` release. The default build uses `gpui-pre 0.3.11`.
-The Fast release itself uses GPUI Pre support crates from snapshot 0.3.11.
+`gpui-fast 0.1.16` release. The default build uses `gpui-pre 0.3.12`.
+The Fast release itself uses GPUI Pre support crates from snapshot 0.3.12.
 No core patch, Git dependency, or environment-variable fallback is required.
 
 ```toml
 [dependencies]
-gpui-fast = { package = "gpui-fast", version = "=0.1.13", default-features = false }
+gpui-fast = { package = "gpui-fast", version = "=0.1.16", default-features = false }
 gpui-ohos = { version = "0.0.1-beta.0", features = ["fast"] }
 ```
 

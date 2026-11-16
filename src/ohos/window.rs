@@ -3873,6 +3873,11 @@ impl HasDisplayHandle for OhosWindowHandle {
 }
 
 impl PlatformWindow for OhosWindowHandle {
+    #[cfg(feature = "fast")]
+    fn debug_state(&self) -> serde_json::Value {
+        self.with_window(|window| window.debug_state())
+    }
+
     fn insets(&self) -> WindowInsets {
         self.with_window(|window| window.insets())
     }
@@ -4167,6 +4172,22 @@ impl PlatformWindow for OhosWindowHandle {
 }
 
 impl PlatformWindow for OhosWindow {
+    #[cfg(feature = "fast")]
+    fn debug_state(&self) -> serde_json::Value {
+        serde_json::json!({
+            "window_id": self.window_id,
+            "closed": self.closed.get(),
+            "released": self.released.get(),
+            "surface_available": self.surface_available.get(),
+            "surface_focused": self.surface_focused.get(),
+            "input_ready": self.input_ready.get(),
+            "keyboard_visible": self.keyboard_visible.get(),
+            "fullscreen": self.fullscreen.get(),
+            "maximized": self.maximized.get(),
+            "presentation_pending": self.presentation.needs_presentation(),
+        })
+    }
+
     fn bounds(&self) -> Bounds<Pixels> {
         *self.bounds.borrow()
     }

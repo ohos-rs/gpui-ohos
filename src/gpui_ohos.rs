@@ -15,6 +15,8 @@ pub use ohos::{PlatformOptions, current_platform, try_current_platform};
 pub use ohos::{
     FontCatalog, FontDesignCoordinate, FontFaceData, PlatformServices, SyntheticFontStyle,
 };
+#[cfg(feature = "fast")]
+pub use ohos::{GpuTexture, GpuTextureError, GpuTextureService};
 #[cfg(feature = "grid")]
 pub use ohos::{GridLayoutError, GridLayoutRequest, GridTextCell};
 pub use ohos::{ImagePolicy, ImageRegistrationError, PremultipliedImage, RasterImage};

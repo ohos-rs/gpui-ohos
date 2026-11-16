@@ -1,3 +1,5 @@
+#[path = "../../../src/ohos/dynamic_textures.rs"]
+mod dynamic_textures;
 #[path = "../../../src/ohos/image_alpha.rs"]
 mod image_alpha;
 #[path = "../../../src/ohos/path_targets.rs"]

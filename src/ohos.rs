@@ -7,6 +7,8 @@ mod cursor_visibility;
 mod device;
 mod dispatcher;
 mod display;
+#[cfg(feature = "fast")]
+mod dynamic_textures;
 mod file_access;
 mod frame_delivery;
 mod frame_demand;
@@ -63,24 +65,31 @@ pub fn current_platform(app: OpenHarmonyApp, _headless: bool) -> std::rc::Rc<dyn
     )
 }
 
+#[cfg(feature = "fast")]
+pub use dynamic_textures::{GpuTexture, GpuTextureError, GpuTextureService};
 pub use text_system::{FontCatalog, FontDesignCoordinate, FontFaceData, SyntheticFontStyle};
 #[cfg(feature = "grid")]
 pub use text_system::{GridLayoutError, GridLayoutRequest, GridTextCell};
 
-/// Experimental font-catalog API; signatures may change between releases.
-/// Platform and font services share face bytes, glyph IDs and immutable descriptors.
+/// Experimental services sharing the platform's font and GPU resources.
 pub struct PlatformServices {
     pub platform: std::rc::Rc<dyn gpui::Platform>,
     pub fonts: FontCatalog,
+    #[cfg(feature = "fast")]
+    pub gpu_textures: GpuTextureService,
 }
 
 impl PlatformServices {
     pub fn try_new(app: OpenHarmonyApp, options: PlatformOptions) -> anyhow::Result<Self> {
         let platform = platform::OhosPlatform::new(app, options)?;
         let fonts = platform.font_catalog();
+        #[cfg(feature = "fast")]
+        let gpu_textures = platform.gpu_texture_service();
         Ok(Self {
             platform: std::rc::Rc::new(platform),
             fonts,
+            #[cfg(feature = "fast")]
+            gpu_textures,
         })
     }
 }

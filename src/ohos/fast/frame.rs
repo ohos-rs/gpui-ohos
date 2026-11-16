@@ -42,6 +42,7 @@ pub(crate) struct FrameState {
 /// The GPU objects a frame is recorded with, borrowed from whoever owns them:
 /// the on-screen renderer, or the pixel tests' surfaceless harness.
 pub(crate) struct FrameTarget<'a> {
+    pub(crate) dynamic_textures: &'a crate::ohos::dynamic_textures::DynamicTextures,
     pub(crate) device: &'a wgpu::Device,
     pub(crate) queue: &'a wgpu::Queue,
     pub(crate) pipelines: &'a WgpuPipelines,
@@ -108,6 +109,7 @@ impl FrameHost for WgpuRenderer {
             }
         });
         FrameTarget {
+            dynamic_textures: &self.dynamic_textures,
             device: &self.device,
             queue: &self.queue,
             pipelines: &self.pipelines,
@@ -869,7 +871,15 @@ pub(crate) fn draw_scene(
                 }
             }
             PrimitiveBatch::PolychromeSprites { texture_id, range } => {
-                let texture = atlas_bind_group(target.atlas, texture_id);
+                let texture =
+                    if let Some(id) = gpui::DynamicTextureId::from_atlas_texture_id(texture_id) {
+                        let Some(view) = target.dynamic_textures.view(id) else {
+                            continue;
+                        };
+                        texture_bind_group("dynamic_texture_bind_group", &view)
+                    } else {
+                        atlas_bind_group(target.atlas, texture_id)
+                    };
                 draw_batch(
                     &mut pass,
                     &mut bound,
