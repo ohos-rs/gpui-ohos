@@ -15,6 +15,8 @@ pub struct WgpuContext {
     pub adapter: wgpu::Adapter,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
+    #[cfg(feature = "fast")]
+    pub(crate) dynamic_textures: Arc<super::dynamic_textures::DynamicTextures>,
     dual_source_blending: bool,
     pub(super) render_shader: OnceLock<wgpu::ShaderModule>,
     pub(super) render_layouts: OnceLock<WgpuBindGroupLayouts>,
@@ -109,11 +111,23 @@ impl WgpuContext {
         )
         .map_err(|e| anyhow::anyhow!("Failed to create wgpu device: {e}"))?;
 
+        let device = Arc::new(device);
+        let queue = Arc::new(queue);
+        #[cfg(feature = "fast")]
+        let dynamic_textures = Arc::new(super::dynamic_textures::DynamicTextures::new(
+            device.clone(),
+            queue.clone(),
+            super::dynamic_textures::DynamicTextureUploads::install(
+                device.limits().max_texture_dimension_2d,
+            ),
+        ));
         Ok(Self {
             instance,
             adapter,
-            device: Arc::new(device),
-            queue: Arc::new(queue),
+            device,
+            queue,
+            #[cfg(feature = "fast")]
+            dynamic_textures,
             dual_source_blending: dual_source_blending_available,
             render_shader: OnceLock::new(),
             render_layouts: OnceLock::new(),

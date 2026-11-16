@@ -29,6 +29,9 @@ use crate::ohos::wgpu_renderer::{
 };
 use crate::ohos::{path_targets::PathTargets as NativePathTargets, wgpu_atlas::WgpuAtlas};
 
+#[path = "dynamic_texture_tests.rs"]
+mod dynamic_texture_tests;
+
 #[test]
 fn harness_renders_a_quad_at_the_right_pixels() {
     let Some(mut harness) = Harness::new() else {
@@ -41,6 +44,44 @@ fn harness_renders_a_quad_at_the_right_pixels() {
     let pixels = harness.render(&scene, device_size(32, 32), rgba(0xffffffff));
     assert_eq!(pixel(&pixels, 32, 8, 8), [255, 0, 0, 255]);
     assert_eq!(pixel(&pixels, 32, 1, 1), [255, 255, 255, 255]);
+}
+
+#[test]
+fn unowned_dynamic_textures_are_skipped_in_frames_and_tiles() {
+    let mut harness = Harness::new().expect("dynamic texture test requires a GPU");
+    let extent = device_size(32, 32);
+    let texture = gpui::DynamicTexture::new_gpu(device_size(8, 8)).unwrap();
+    let mut scene = Scene::default();
+    scene.insert_primitive(quad(sp(4., 4., 8., 8.), Hsla::from(rgba(0xff0000ff))));
+    scene.finish();
+    let expected = harness.render(&scene, extent, rgba(0xffffffff));
+
+    scene.insert_primitive(PolychromeSprite {
+        order: 0,
+        pad: 0,
+        grayscale: false.into(),
+        opacity: 1.,
+        bounds: sp(4., 4., 8., 8.),
+        content_mask: no_mask(),
+        corner_radii: Corners::default(),
+        tile: AtlasTile {
+            texture_id: texture.id().atlas_texture_id(),
+            tile_id: gpui::TileId(0),
+            padding: 0,
+            bounds: Bounds::new(point(DevicePixels(0), DevicePixels(0)), device_size(8, 8)),
+        },
+    });
+    scene.finish();
+
+    let actual = harness.render(&scene, extent, rgba(0xffffffff));
+    assert_same_pixels(&actual, &expected, 32);
+    let tiled = tiled_scene(&scene, extent);
+    let actual = harness.render(&tiled, extent, rgba(0xffffffff));
+    assert_same_pixels(&actual, &expected, 32);
+
+    texture.remove();
+    let actual = harness.render(&scene, extent, rgba(0xffffffff));
+    assert_same_pixels(&actual, &expected, 32);
 }
 
 const TILE: u32 = 512;
@@ -715,6 +756,8 @@ pub(super) struct Harness {
     queue: Arc<wgpu::Queue>,
     format: wgpu::TextureFormat,
     atlas: WgpuAtlas,
+    dynamic_textures: Arc<crate::ohos::dynamic_textures::DynamicTextures>,
+    uploads: Arc<crate::ohos::dynamic_textures::DynamicTextureUploads>,
     pipelines: WgpuPipelines,
     bind_group_layouts: WgpuBindGroupLayouts,
     atlas_sampler: wgpu::Sampler,
@@ -771,6 +814,14 @@ impl Harness {
         .expect("test GPU device");
         let dual_source_blending = false;
         let (device, queue) = (Arc::new(device), Arc::new(queue));
+        let uploads = Arc::new(crate::ohos::dynamic_textures::DynamicTextureUploads::new(
+            device.limits().max_texture_dimension_2d,
+        ));
+        let dynamic_textures = Arc::new(crate::ohos::dynamic_textures::DynamicTextures::new(
+            device.clone(),
+            queue.clone(),
+            uploads.clone(),
+        ));
 
         // The surface's choice when it offers both.
         let usages = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
@@ -860,6 +911,8 @@ impl Harness {
             queue,
             format,
             atlas,
+            dynamic_textures,
+            uploads,
             pipelines,
             bind_group_layouts,
             atlas_sampler,
@@ -1005,6 +1058,7 @@ impl FrameHost for Harness {
     fn target(&self) -> FrameTarget<'_> {
         let path_targets = self.path_targets.as_ref();
         FrameTarget {
+            dynamic_textures: &self.dynamic_textures,
             device: &self.device,
             queue: &self.queue,
             pipelines: &self.pipelines,

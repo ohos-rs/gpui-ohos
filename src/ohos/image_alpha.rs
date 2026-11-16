@@ -162,12 +162,21 @@ pub(super) fn encode_sprite_flags<'a>(
     sprites: &'a [PolychromeSprite],
     scratch: &'a mut Vec<PolychromeSprite>,
 ) -> &'a [PolychromeSprite] {
-    if image_flags.is_empty() || sprites.is_empty() {
+    let needs_encoding = !image_flags.is_empty();
+    #[cfg(feature = "fast")]
+    let needs_encoding = needs_encoding
+        || sprites.iter().any(|sprite| {
+            gpui::DynamicTextureId::from_atlas_texture_id(sprite.tile.texture_id).is_some()
+        });
+    if !needs_encoding || sprites.is_empty() {
         return sprites;
     }
     scratch.clear();
     scratch.extend_from_slice(sprites);
     for sprite in scratch.iter_mut() {
+        // Dynamic sprites carry the content revision in the scene's pad field.
+        // Only the GPU upload uses OHOS alpha/sampling flags; leave the scene's
+        // revision intact for retained-frame and scroll-tile invalidation.
         sprite.pad = image_flags
             .get(&(sprite.tile.texture_id, sprite.tile.tile_id.0))
             .copied()

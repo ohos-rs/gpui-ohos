@@ -395,6 +395,11 @@ impl OhosPlatform {
         super::text_system::FontCatalog::new(self.text_system.clone())
     }
 
+    #[cfg(feature = "fast")]
+    pub(super) fn gpu_texture_service(&self) -> super::dynamic_textures::GpuTextureService {
+        super::dynamic_textures::GpuTextureService::new(self.gpu_context.clone())
+    }
+
     pub(crate) fn new(app: OpenHarmonyApp, options: super::PlatformOptions) -> Result<Self> {
         let (main_sender, main_receiver) = PriorityQueueReceiver::new();
         let dispatcher = Arc::new(OhosDispatcher::new(main_sender));
@@ -2765,6 +2770,23 @@ impl Platform for OhosPlatform {
 
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
         *self.keyboard_layout_change.borrow_mut() = Some(callback);
+    }
+
+    #[cfg(feature = "fast")]
+    fn debug_state(&self) -> serde_json::Value {
+        let gpu = match self.gpu_context.get() {
+            None => "initializing",
+            Some(Ok(_)) => "ready",
+            Some(Err(_)) => "failed",
+        };
+        serde_json::json!({
+            "platform": "OpenHarmony",
+            "gpu": gpu,
+            "sleeping": self.sleeping.get(),
+            "hidden": self.was_hidden.get(),
+            "quitting": self.quit_started.get(),
+            "native_menus": self.native_menus,
+        })
     }
 
     fn thermal_state(&self) -> ThermalState {
