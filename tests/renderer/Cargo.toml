@@ -17,7 +17,7 @@ vulkan = ["wgpu/vulkan"]
 anyhow = "1"
 bytemuck = "1"
 etagere = "0.2"
-gpui = { package = "gpui-fast", version = "=0.1.13", default-features = false, features = ["test-support"] }
+gpui = { package = "gpui-fast", version = "=0.1.16", default-features = false, features = ["test-support"] }
 itertools = "0.14"
 log = "0.4"
 parking_lot = "0.12"
